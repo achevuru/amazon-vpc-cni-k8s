@@ -16,18 +16,16 @@ package eniconfig
 
 import (
 	"context"
-	"os"
-	"runtime"
-	"sync"
-	"time"
-
-	"github.com/operator-framework/operator-sdk/pkg/sdk"
-	"github.com/pkg/errors"
-
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/crd/v1alpha1"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
-	sdkVersion "github.com/operator-framework/operator-sdk/version"
+	"fmt"
 	corev1 "k8s.io/api/core/v1"
+	"os"
+	"sync"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/v1alpha1"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -48,8 +46,8 @@ const (
 
 // ENIConfig interface
 type ENIConfig interface {
-	MyENIConfig() (*v1alpha1.ENIConfigSpec, error)
-	Getter() *ENIConfigInfo
+	MyENIConfig(client.Client) (*v1alpha1.ENIConfigSpec, error)
+    GetENIConfigName(context.Context, client.Client) (string, error)
 }
 
 // ErrNoENIConfig is the missing ENIConfig error
@@ -75,6 +73,7 @@ type ENIConfigInfo struct {
 	EniConfigLabelDef      string
 }
 
+
 // NewENIConfigController creates a new ENIConfig controller
 func NewENIConfigController() *ENIConfigController {
 	return &ENIConfigController{
@@ -86,6 +85,7 @@ func NewENIConfigController() *ENIConfigController {
 	}
 }
 
+/*
 // NewHandler creates a new handler for sdk
 func NewHandler(controller *ENIConfigController) sdk.Handler {
 	return &Handler{controller: controller}
@@ -151,7 +151,10 @@ func printVersion() {
 	log.Infof("operator-sdk Version: %v", sdkVersion.Version)
 }
 
+ */
+
 // Start kicks off ENIConfig controller
+/*
 func (eniCfg *ENIConfigController) Start() {
 	printVersion()
 
@@ -159,13 +162,14 @@ func (eniCfg *ENIConfigController) Start() {
 
 	resource := "crd.k8s.amazonaws.com/v1alpha1"
 	kind := "ENIConfig"
-	resyncPeriod := time.Second * 5
+	resyncPeriod := time.Hour * 10
 	log.Infof("Watching %s, %s, every %v s", resource, kind, resyncPeriod.Seconds())
 	sdk.Watch(resource, kind, "", resyncPeriod)
 	sdk.Watch("/v1", "Node", corev1.NamespaceAll, resyncPeriod)
 	sdk.Handle(NewHandler(eniCfg))
 	sdk.Run(context.TODO())
 }
+
 
 func (eniCfg *ENIConfigController) Getter() *ENIConfigInfo {
 	output := &ENIConfigInfo{
@@ -183,20 +187,37 @@ func (eniCfg *ENIConfigController) Getter() *ENIConfigInfo {
 	}
 	return output
 }
+*/
 
-// MyENIConfig returns the security
-func (eniCfg *ENIConfigController) MyENIConfig() (*v1alpha1.ENIConfigSpec, error) {
-	eniCfg.eniLock.Lock()
-	defer eniCfg.eniLock.Unlock()
+// MyENIConfig returns the ENIConfig applicable to the particular node
+func MyENIConfig(k8sClient client.Client) (*v1alpha1.ENIConfigSpec, error) {
 
-	myENIConfig, ok := eniCfg.eni[eniCfg.myENI]
-
-	if ok {
-		return &v1alpha1.ENIConfigSpec{
-			SecurityGroups: myENIConfig.SecurityGroups,
-			Subnet:         myENIConfig.Subnet,
-		}, nil
+	ctx := context.Background()
+	eniConfigName, err := GetENIConfigName(ctx, k8sClient)
+	if err != nil {
+       log.Debugf("Error while retrieving Node name")
 	}
+
+	log.Debugf("Found ENI Config Name: %s", eniConfigName)
+	log.Debugf("Let's get ENIConfig List Info via Manager Client - Cache Synced - New")
+
+	eniConfigsList := v1alpha1.ENIConfigList{}
+	err = k8sClient.List(ctx, &eniConfigsList)
+	if err != nil {
+		fmt.Errorf("Error while EniConfig List Get: %s", err)
+	}
+	log.Debugf("ENIConfigs Size: %s ", len(eniConfigsList.Items))
+	for _, eni := range eniConfigsList.Items {
+		if eniConfigName == eni.Name {
+			log.Debugf("Matching ENIConfig found: %s - %s - %s ", eni.Name, eni.Spec.Subnet, eni.Spec.SecurityGroups)
+			return &v1alpha1.ENIConfigSpec{
+				SecurityGroups: eni.Spec.SecurityGroups,
+				Subnet:         eni.Spec.Subnet,
+			}, nil
+		}
+		log.Debugf("ENIConfigs Info: %s - %s - %s ", eni.Name, eni.Spec.Subnet, eni.Spec.SecurityGroups)
+	}
+
 	return nil, ErrNoENIConfig
 }
 
@@ -226,4 +247,37 @@ func getEniConfigLabelDef() string {
 		return inputStr
 	}
 	return defaultEniConfigLabelDef
+}
+
+func GetENIConfigName(ctx context.Context, k8sClient client.Client) (string, error) {
+    var eniConfigName string
+	log.Debugf("Let's get Node List Info via Manager Client")
+	nodeList := corev1.NodeList{}
+	err := k8sClient.List(ctx, &nodeList)
+	if err != nil {
+		fmt.Errorf("Error while Node List Get: %s", err)
+	}
+	log.Debugf("Node Count: ", len(nodeList.Items))
+	for _, node := range nodeList.Items {
+		if node.Name == os.Getenv("MY_NODE_NAME") {
+			log.Debugf("Node Info: %s", node.Name)
+			val, ok := node.GetAnnotations()[getEniConfigAnnotationDef()]
+			if !ok {
+				val, ok = node.GetLabels()[getEniConfigLabelDef()]
+				if !ok {
+					val = eniConfigDefault
+				}
+			}
+
+			eniConfigName = val
+			if val != eniConfigDefault {
+				labels := node.GetLabels()
+				labels["vpc.amazonaws.com/eniConfig"] = eniConfigName
+				node.SetLabels(labels)
+				//k8sClient.Update(ctx, )
+			}
+		}
+	}
+	log.Debugf("ENI Config Name: %s", eniConfigName)
+	return eniConfigName, nil
 }

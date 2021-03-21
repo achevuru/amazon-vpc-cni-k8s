@@ -141,8 +141,10 @@ func eniV1RequestHandler(ipam *IPAMContext) func(http.ResponseWriter, *http.Requ
 }
 
 func eniConfigRequestHandler(ipam *IPAMContext) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		responseJSON, err := json.Marshal(ipam.eniConfig.Getter())
+		return func(w http.ResponseWriter, r *http.Request) {
+	}
+	/*
+		responseJSON, err := json.Marshal(ipam.eniConfig.MyENIConfig())
 		if err != nil {
 			log.Errorf("Failed to marshal ENI config: %v", err)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -150,6 +152,7 @@ func eniConfigRequestHandler(ipam *IPAMContext) func(http.ResponseWriter, *http.
 		}
 		logErr(w.Write(responseJSON))
 	}
+	 */
 }
 
 func networkEnvV1RequestHandler() func(http.ResponseWriter, *http.Request) {

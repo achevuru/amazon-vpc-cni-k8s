@@ -16,11 +16,15 @@ package main
 
 import (
 	"os"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"time"
 
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/eniconfig"
+	eniconfigscheme "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/v1alpha1"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 var version string
@@ -28,6 +32,8 @@ var version string
 func main() {
 	os.Exit(_main())
 }
+
+
 
 func _main() int {
 	//Do not add anything before initializing logger
@@ -39,19 +45,30 @@ func _main() int {
 
 	log.Infof("Starting L-IPAMD %s  ...", version)
 
-	kubeClient, err := k8sapi.CreateKubeClient()
-	if err != nil {
-		log.Errorf("Failed to create client: %v", err)
-		return 1
-	}
+	scheme := runtime.NewScheme()
+	clientgoscheme.AddToScheme(scheme)
+	eniconfigscheme.AddToScheme(scheme)
 
-	eniConfigController := eniconfig.NewENIConfigController()
-	if ipamd.UseCustomNetworkCfg() {
-		go eniConfigController.Start()
-	}
+	kubeConfig := ctrl.GetConfigOrDie()
 
-	ipamContext, err := ipamd.New(kubeClient, eniConfigController)
+	syncPeriod := 10*time.Hour
 
+	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
+		Scheme:                 scheme,
+		SyncPeriod:             &syncPeriod,
+		LeaderElection:         false,
+		Port:                   9443,
+	})
+
+	stopChan := ctrl.SetupSignalHandler()
+	go func() {
+		mgr.GetCache().Start(stopChan)
+	}()
+	mgr.GetCache().WaitForCacheSync(stopChan)
+
+
+	//ipamContext, err := ipamd.New(k8sclient, eniConfigController)
+	ipamContext, err := ipamd.New(mgr.GetClient())
 	if err != nil {
 		log.Errorf("Initialization failure: %v", err)
 		return 1

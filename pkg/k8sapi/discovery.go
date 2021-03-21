@@ -12,7 +12,7 @@ import (
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
 
-	"github.com/operator-framework/operator-sdk/pkg/k8sclient"
+	//"github.com/operator-framework/operator-sdk/pkg/k8sclient"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/runtime"
@@ -79,6 +79,7 @@ func NewController(clientset kubernetes.Interface) *Controller {
 
 // CreateKubeClient creates a k8s client
 func CreateKubeClient() (kubernetes.Interface, error) {
+	/*
 	kubeClient := k8sclient.GetKubeClient()
 	// Informers don't seem to do a good job logging error messages when it
 	// can't reach the server, making debugging hard. This makes it easier to
@@ -90,8 +91,8 @@ func CreateKubeClient() (kubernetes.Interface, error) {
 	}
 	log.Infof("Successful communication with the Cluster! Cluster Version is: v%s.%s. git version: %s. git tree state: %s. commit: %s. platform: %s",
 		v.Major, v.Minor, v.GitVersion, v.GitTreeState, v.GitCommit, v.Platform)
-
-	return kubeClient, nil
+    */
+	return nil, nil
 }
 
 // GetCNIPods return the list of CNI pod names
@@ -119,6 +120,7 @@ func (d *Controller) DiscoverCNIK8SPods() {
 
 // DiscoverK8SPods takes a watcher and updates the Controller cache
 func (d *Controller) DiscoverK8SPods(podListWatcher *cache.ListWatch) {
+	/*
 	// create the workqueue
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
@@ -149,19 +151,22 @@ func (d *Controller) DiscoverK8SPods(podListWatcher *cache.ListWatch) {
 		},
 	}, cache.Indexers{})
 
-	d.controller = newController(queue, indexer, informer)
+	//d.controller = newController(queue, indexer, informer)
 
 	// Now let's start the controller
 	stop := make(chan struct{})
 	defer close(stop)
-	go d.run(1, stop)
+	//go d.run(1, stop)
 
 	// Wait forever
 	select {}
+
+	 */
 }
 
 // SetNodeLabel sets or deletes a label on the current node
 func (d *Controller) SetNodeLabel(key, value string) error {
+	/*
 	// Find my node
 	node, err := d.kubeClient.CoreV1().Nodes().Get(d.myNodeName, metav1.GetOptions{})
 	if err != nil {
@@ -191,12 +196,14 @@ func (d *Controller) SetNodeLabel(key, value string) error {
 		log.Errorf("Failed to update node %s with label %q: %q, error: %v", d.myNodeName, key, value, err)
 	}
 	log.Infof("Updated node %s with label %q: %q", d.myNodeName, key, value)
+
+	 */
 	return nil
 }
 
 // GetPod returns a pod based on name and namespace
 func (d *Controller) GetPod(podName, namespace string) (*v1.Pod, error) {
-	return d.kubeClient.CoreV1().Pods(namespace).Get(podName, metav1.GetOptions{})
+	return nil, nil //d.kubeClient.CoreV1().Pods(namespace).Get(podName, metav1.GetOptions{})
 }
 
 // The rest of logic/code are taken from kubernetes/client-go/examples/workqueue
