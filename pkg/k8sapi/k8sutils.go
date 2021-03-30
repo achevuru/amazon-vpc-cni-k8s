@@ -16,7 +16,6 @@ var log = logger.Get()
 
 // CreateKubeClient creates a k8s client
 func CreateKubeClients() (client.Client, client.Client, error) {
-
 	restCfg := ctrl.GetConfigOrDie()
 	vpcCniScheme := runtime.NewScheme()
 	clientgoscheme.AddToScheme(vpcCniScheme)

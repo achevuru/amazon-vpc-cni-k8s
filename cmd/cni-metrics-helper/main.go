@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/aws/amazon-vpc-cni-k8s/cmd/cni-metrics-helper/metrics"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/publisher"
 
 	"k8s.io/client-go/kubernetes"
@@ -109,7 +110,12 @@ func main() {
 		defer cw.Stop()
 	}
 
-	podWatcher := metrics.NewDefaultPodWatcher(log)
+	_, k8sClient, err := k8sapi.CreateKubeClients()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	podWatcher := metrics.NewDefaultPodWatcher(k8sClient, log)
 	var cniMetric = metrics.CNIMetricsNew(clientset, cw, options.submitCW, log, podWatcher)
 
 	// metric loop

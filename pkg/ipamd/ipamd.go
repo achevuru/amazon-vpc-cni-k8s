@@ -16,7 +16,6 @@ package ipamd
 import (
 	"context"
 	"fmt"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
 	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,22 +26,19 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/awsutils"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/eniconfig"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd/datastore"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/networkutils"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
-	//"github.com/aws/amazon-vpc-cni-k8s/pkg/apis/v1alpha1"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/types"
-	//"k8s.io/client-go/kubernetes"
 )
 
 // The package ipamd is a long running daemon which manages a warm pool of available IP addresses.
@@ -195,7 +191,6 @@ type IPAMContext struct {
 	standalonek8sClient  client.Client
 	k8sClient         client.Client
 	useCustomNetworking  bool
-	//eniConfig            eniconfig.ENIConfig
 	networkClient        networkutils.NetworkAPIs
 	maxIPsPerENI         int
 	maxENI               int
@@ -327,7 +322,6 @@ func (c *IPAMContext) nodeInit() error {
 	var err error
 	ctx := context.Background()
 
-
 	log.Debugf("Start node init")
 
 	nodeMaxENI, err := c.getMaxENI()
@@ -335,6 +329,7 @@ func (c *IPAMContext) nodeInit() error {
 		log.Error("Failed to get ENI limit")
 		return err
 	}
+
 	c.maxENI = nodeMaxENI
 	c.maxIPsPerENI, err = c.awsClient.GetENIIPv4Limit()
 	if err != nil {
@@ -345,6 +340,7 @@ func (c *IPAMContext) nodeInit() error {
 	if err != nil {
 		return err
 	}
+
 	primaryIP := c.awsClient.GetLocalIPv4()
 	err = c.networkClient.SetupHostNetwork(vpcCIDRs, c.awsClient.GetPrimaryENImac(), &primaryIP, c.enablePodENI)
 	if err != nil {
@@ -515,7 +511,7 @@ func (c *IPAMContext) StartNodeIPPoolManager() {
 func (c *IPAMContext) updateIPPoolIfRequired(ctx context.Context) {
 	c.askForTrunkENIIfNeeded(ctx)
 	if c.nodeIPPoolTooLow() {
-		c.increaseIPPool()
+		c.increaseIPPool(ctx)
 	} else if c.nodeIPPoolTooHigh() {
 		c.decreaseIPPool(decreaseIPPoolInterval)
 	}
@@ -628,7 +624,7 @@ func (c *IPAMContext) findFreeableIPs(eni string) ([]string, error) {
 	return freeableIPs, nil
 }
 
-func (c *IPAMContext) increaseIPPool() {
+func (c *IPAMContext) increaseIPPool(ctx context.Context) {
 	log.Debug("Starting to increase IP pool size")
 	ipamdActionsInprogress.WithLabelValues("increaseIPPool").Add(float64(1))
 	defer ipamdActionsInprogress.WithLabelValues("increaseIPPool").Sub(float64(1))
@@ -659,7 +655,7 @@ func (c *IPAMContext) increaseIPPool() {
 		}
 		// If we did not add an IP, try to add an ENI instead.
 		if c.dataStore.GetENIs() < (c.maxENI - c.unmanagedENI - reserveSlotForTrunkENI) {
-			if err = c.tryAllocateENI(); err == nil {
+			if err = c.tryAllocateENI(ctx); err == nil {
 				c.updateLastNodeIPPoolAction()
 			}
 		} else {
@@ -676,11 +672,11 @@ func (c *IPAMContext) updateLastNodeIPPoolAction() {
 	logPoolStats(total, used, c.maxIPsPerENI)
 }
 
-func (c *IPAMContext) tryAllocateENI() error {
+func (c *IPAMContext) tryAllocateENI(ctx context.Context) error {
 	var securityGroups []*string
 	var subnet string
 	if c.useCustomNetworking {
-		eniCfg, err := eniconfig.MyENIConfig(c.k8sClient)
+		eniCfg, err := eniconfig.MyENIConfig(ctx, c.k8sClient)
 		if err != nil {
 			log.Errorf("Failed to get pod ENI config")
 			return err
@@ -1347,12 +1343,10 @@ func (c *IPAMContext) GetPod(podName, namespace string) (*corev1.Pod, error) {
 	ctx := context.Background()
 	var pod corev1.Pod
 
-	log.Debugf("Let's get Pod %s-%s Info via Manager Client", podName, namespace)
 	podKey := types.NamespacedName{
 		Namespace: namespace,
 		Name:      podName,
 	}
-
 	err := c.standalonek8sClient.Get(ctx, podKey ,&pod)
 	if err != nil {
 		return nil, fmt.Errorf("Error while trying to retrieve Pod Info: %s", err)

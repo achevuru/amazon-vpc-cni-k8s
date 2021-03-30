@@ -62,23 +62,19 @@ type ENIConfigInfo struct {
 }
 
 // MyENIConfig returns the ENIConfig applicable to the particular node
-func MyENIConfig(k8sClient client.Client) (*v1alpha1.ENIConfigSpec, error) {
-
-	ctx := context.Background()
+func MyENIConfig(ctx context.Context, k8sClient client.Client) (*v1alpha1.ENIConfigSpec, error) {
 	eniConfigName, err := GetENIConfigName(ctx, k8sClient)
 	if err != nil {
-       log.Debugf("Error while retrieving Node name")
+        log.Debugf("Error while retrieving Node name")
 	}
 
-	log.Debugf("Found ENI Config Name: %s", eniConfigName)
-	log.Debugf("Let's get ENIConfig List Info via Manager Client - Cache Synced - New")
+	log.Infof("Found ENI Config Name: %s", eniConfigName)
 
 	eniConfigsList := v1alpha1.ENIConfigList{}
 	err = k8sClient.List(ctx, &eniConfigsList)
 	if err != nil {
 		fmt.Errorf("Error while EniConfig List Get: %s", err)
 	}
-	log.Debugf("ENIConfigs Size: %s ", len(eniConfigsList.Items))
 	for _, eni := range eniConfigsList.Items {
 		if eniConfigName == eni.Name {
 			log.Debugf("Matching ENIConfig found: %s - %s - %s ", eni.Name, eni.Spec.Subnet, eni.Spec.SecurityGroups)
@@ -87,7 +83,6 @@ func MyENIConfig(k8sClient client.Client) (*v1alpha1.ENIConfigSpec, error) {
 				Subnet:         eni.Spec.Subnet,
 			}, nil
 		}
-		log.Debugf("ENIConfigs Info: %s - %s - %s ", eni.Name, eni.Spec.Subnet, eni.Spec.SecurityGroups)
 	}
 	return nil, ErrNoENIConfig
 }
@@ -122,7 +117,6 @@ func getEniConfigLabelDef() string {
 
 func GetENIConfigName(ctx context.Context, k8sClient client.Client) (string, error) {
     var eniConfigName string
-	log.Debugf("Let's get Node List Info via Manager Client")
 	nodeList := corev1.NodeList{}
 	err := k8sClient.List(ctx, &nodeList)
 	if err != nil {
@@ -147,6 +141,5 @@ func GetENIConfigName(ctx context.Context, k8sClient client.Client) (string, err
 			}
 		}
 	}
-	log.Debugf("ENI Config Name: %s", eniConfigName)
 	return eniConfigName, nil
 }
