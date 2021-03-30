@@ -25,9 +25,11 @@ import (
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
 	"github.com/spf13/pflag"
 
-	//"github.com/aws/amazon-vpc-cni-k8s/cmd/cni-metrics-helper/metrics"
-	//"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
+	"github.com/aws/amazon-vpc-cni-k8s/cmd/cni-metrics-helper/metrics"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/publisher"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 type options struct {
@@ -80,13 +82,18 @@ func main() {
 
 	log.Infof("Starting CNIMetricsHelper. Sending metrics to CloudWatch: %v, LogLevel %s", options.submitCW, logConfig.LogLevel)
 
-	//kubeClient, err := k8sapi.CreateKubeClient()
+
+	// creates the in-cluster config
+	config, err := rest.InClusterConfig()
 	if err != nil {
-		log.Fatalf("Failed to create client: %v", err)
+		panic(err.Error())
 	}
 
-	//discoverController := k8sapi.NewController(kubeClient)
-	//go discoverController.DiscoverCNIK8SPods()
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
 
 	var cw publisher.Publisher
 
@@ -102,12 +109,13 @@ func main() {
 		defer cw.Stop()
 	}
 
-	//var cniMetric = metrics.CNIMetricsNew(kubeClient, cw, discoverController, options.submitCW, log)
+	podWatcher := metrics.NewDefaultPodWatcher(log)
+	var cniMetric = metrics.CNIMetricsNew(clientset, cw, options.submitCW, log, podWatcher)
 
 	// metric loop
 	var pullInterval = 30 // seconds
 	for range time.Tick(time.Duration(pullInterval) * time.Second) {
 		log.Info("Collecting metrics ...")
-		//metrics.Handler(cniMetric)
+		metrics.Handler(cniMetric)
 	}
 }

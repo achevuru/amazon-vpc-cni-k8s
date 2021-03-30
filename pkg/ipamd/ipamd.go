@@ -192,7 +192,8 @@ var (
 type IPAMContext struct {
 	awsClient            awsutils.APIs
 	dataStore            *datastore.DataStore
-	k8sClient            client.Client
+	standalonek8sClient  client.Client
+	k8sClient         client.Client
 	useCustomNetworking  bool
 	//eniConfig            eniconfig.ENIConfig
 	networkClient        networkutils.NetworkAPIs
@@ -286,13 +287,13 @@ func prometheusRegister() {
 // New retrieves IP address usage information from Instance MetaData service and Kubelet
 // then initializes IP address pool data store
 //func New(k8sapiClient kubernetes.Interface, eniConfig *eniconfig.ENIConfigController) (*IPAMContext, error) {
-func New(k8sapiClient client.Client) (*IPAMContext, error) {
+func New(k8sapiClient client.Client, k8sClient client.Client) (*IPAMContext, error) {
 	prometheusRegister()
 	c := &IPAMContext{}
 
-	c.k8sClient = k8sapiClient
+	c.standalonek8sClient = k8sapiClient
+	c.k8sClient = k8sClient
 	c.networkClient = networkutils.New()
-	//c.eniConfig = eniConfig
 	c.useCustomNetworking = UseCustomNetworkCfg()
 
 	client, err := awsutils.New(c.useCustomNetworking)
@@ -328,42 +329,6 @@ func (c *IPAMContext) nodeInit() error {
 
 
 	log.Debugf("Start node init")
-
-	/*
-	var podsList corev1.PodList
-	//var pod corev1.Pod
-	var listOptions client.ListOptions
-	listOptions.Namespace = "kube-system"
-
-	log.Debugf("Let's get Pod List Info via Manager Client - Cache Synced")
-	//pod, err := c.k8sClient.CoreV1().Pods("kube-system").Get(ctx,"coredns-5946c5d67c-lqqlw", metav1.GetOptions{})
-	var podKey types.NamespacedName
-	podKey.Name="coredns-5946c5d67c-lqqlw"
-	podKey.Namespace="kube-system"
-
-	err = c.k8sClient.List(ctx, &podsList, &listOptions)
-	if err != nil {
-		fmt.Errorf("Error while Pod List Get: %s", err)
-	}
-	for _, pod := range podsList.Items {
-		log.Debugf("Kube-System Pod Info: %s - %s ", pod.Name, pod.Namespace)
-	}
-
-
-	log.Debugf("Let's get ENIConfig List Info via Manager Client - Cache Synced - New")
-
-	eniConfigsList := v1alpha1.ENIConfigList{}
-	//var listOptions1 client.ListOptions
-	err = c.k8sClient.List(ctx, &eniConfigsList)
-	if err != nil {
-		fmt.Errorf("Error while EniConfig List Get: %s", err)
-	}
-	log.Debugf("ENIConfigs Size: %s ", len(eniConfigsList.Items))
-	for _, eni := range eniConfigsList.Items {
-		log.Debugf("ENIConfigs Info: %s - %s - %s ", eni.Name, eni.Spec.Subnet, eni.Spec.SecurityGroups)
-	}
-
-	 */
 
 	nodeMaxENI, err := c.getMaxENI()
 	if err != nil {
@@ -443,7 +408,6 @@ func (c *IPAMContext) nodeInit() error {
 	if c.useCustomNetworking && eniConfigName != "default" {
 		// Signal to VPC Resource Controller that the node is using custom networking
 		log.Debugf("Custom nw enabled. Set label...")
-		eniConfigName,_ := eniconfig.GetENIConfigName(ctx, c.k8sClient)
 		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, eniConfigName)
 		if err != nil {
 			log.Errorf("Failed to set eniConfig node label", err)
@@ -1382,19 +1346,16 @@ func (c *IPAMContext) SetNodeLabel(ctx context.Context, key, value string) error
 func (c *IPAMContext) GetPod(podName, namespace string) (*corev1.Pod, error) {
 	ctx := context.Background()
 	var pod corev1.Pod
-	var listOptions client.ListOptions
-	listOptions.Namespace = "kube-system"
 
 	log.Debugf("Let's get Pod %s-%s Info via Manager Client", podName, namespace)
-	var podKey types.NamespacedName
-	podKey.Name=podName
-	podKey.Namespace=namespace
+	podKey := types.NamespacedName{
+		Namespace: namespace,
+		Name:      podName,
+	}
 
-	//err = c.k8sClient.List(ctx, &podsList, &listOptions)
-	err := c.k8sClient.Get(ctx, podKey ,&pod)
+	err := c.standalonek8sClient.Get(ctx, podKey ,&pod)
 	if err != nil {
 		return nil, fmt.Errorf("Error while trying to retrieve Pod Info: %s", err)
 	}
-
 	return &pod, nil
 }

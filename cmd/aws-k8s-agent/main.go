@@ -15,16 +15,10 @@
 package main
 
 import (
-	"os"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"time"
-
-	eniconfigscheme "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/v1alpha1"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
-
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"os"
 )
 
 var version string
@@ -45,30 +39,17 @@ func _main() int {
 
 	log.Infof("Starting L-IPAMD %s  ...", version)
 
-	scheme := runtime.NewScheme()
-	clientgoscheme.AddToScheme(scheme)
-	eniconfigscheme.AddToScheme(scheme)
+	//Check API Server Connectivity
+	if k8sapi.CheckAPIServerConnectivity() != nil{
+		return 1
+	}
 
-	kubeConfig := ctrl.GetConfigOrDie()
+	standaloneK8SClient, k8sClient, err := k8sapi.CreateKubeClients()
+	if err != nil{
+		return 1
+	}
 
-	syncPeriod := 10*time.Hour
-
-	mgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
-		Scheme:                 scheme,
-		SyncPeriod:             &syncPeriod,
-		LeaderElection:         false,
-		Port:                   9443,
-	})
-
-	stopChan := ctrl.SetupSignalHandler()
-	go func() {
-		mgr.GetCache().Start(stopChan)
-	}()
-	mgr.GetCache().WaitForCacheSync(stopChan)
-
-
-	//ipamContext, err := ipamd.New(k8sclient, eniConfigController)
-	ipamContext, err := ipamd.New(mgr.GetClient())
+	ipamContext, err := ipamd.New(standaloneK8SClient, k8sClient)
 	if err != nil {
 		log.Errorf("Initialization failure: %v", err)
 		return 1
