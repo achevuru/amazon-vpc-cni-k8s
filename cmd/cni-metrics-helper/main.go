@@ -28,9 +28,6 @@ import (
 	"github.com/aws/amazon-vpc-cni-k8s/cmd/cni-metrics-helper/metrics"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/publisher"
-
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 type options struct {
@@ -83,19 +80,6 @@ func main() {
 
 	log.Infof("Starting CNIMetricsHelper. Sending metrics to CloudWatch: %v, LogLevel %s", options.submitCW, logConfig.LogLevel)
 
-
-	// creates the in-cluster config
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		panic(err.Error())
-	}
-
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
-
 	var cw publisher.Publisher
 
 	if options.submitCW {
@@ -110,13 +94,15 @@ func main() {
 		defer cw.Stop()
 	}
 
+	clientSet, err := k8sapi.GetKubeClientSet()
+
 	_, k8sClient, err := k8sapi.CreateKubeClients()
 	if err != nil {
 		panic(err.Error())
 	}
 
 	podWatcher := metrics.NewDefaultPodWatcher(k8sClient, log)
-	var cniMetric = metrics.CNIMetricsNew(clientset, cw, options.submitCW, log, podWatcher)
+	var cniMetric = metrics.CNIMetricsNew(clientSet, cw, options.submitCW, log, podWatcher)
 
 	// metric loop
 	var pullInterval = 30 // seconds

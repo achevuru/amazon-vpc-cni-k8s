@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,8 +41,22 @@ func CreateKubeClients() (client.Client, client.Client, error) {
 		Writer: standaloneK8SClient,
 		StatusClient: standaloneK8SClient,
 	}
-
 	return standaloneK8SClient, k8sClient, nil
+}
+
+func GetKubeClientSet() (kubernetes.Interface, error) {
+	// creates the in-cluster config
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// creates the clientset
+	clientSet, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+	return clientSet, nil
 }
 
 func CheckAPIServerConnectivity() error {
