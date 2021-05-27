@@ -111,6 +111,9 @@ type APIs interface {
 	// FreeENI detaches ENI interface and deletes it
 	FreeENI(eniName string) error
 
+	// TagENI tags an ENI interface
+    TagENI(eniID string, maxBackoffDelay time.Duration)
+
 	// GetAttachedENIs retrieves eni information from instance metadata service
 	GetAttachedENIs() (eniList []ENIMetadata, err error)
 
@@ -120,7 +123,10 @@ type APIs interface {
 	// DescribeAllENIs calls EC2 and returns a fully populated DescribeAllENIsResult struct and an error
 	DescribeAllENIs() (DescribeAllENIsResult, error)
 
-	// AllocIPAddress allocates an IP address for an ENI
+	// TagInstance tags an EC2 instance
+    TagInstance(instanceID string, maxBackoffDelay time.Duration)
+
+    // AllocIPAddress allocates an IP address for an ENI
 	AllocIPAddress(eniID string) error
 
 	// AllocIPAddresses allocates numIPs IP addresses on a ENI
@@ -147,7 +153,10 @@ type APIs interface {
 	// GetPrimaryENImac returns the mac address of the primary ENI
 	GetPrimaryENImac() string
 
-	// SetUnmanagedENIs sets the list of unmanaged ENI IDs
+	// GetInstanceID returns the instance ID
+	GetInstanceID() string
+
+    // SetUnmanagedENIs sets the list of unmanaged ENI IDs
 	SetUnmanagedENIs(eniIDs []string)
 
 	// IsUnmanagedENI checks if an ENI is unmanaged
@@ -617,6 +626,9 @@ func (cache *EC2InstanceMetadataCache) AllocENI(useCustomCfg bool, sg []*string,
 		return "", errors.Wrap(err, "AllocENI: failed to create ENI")
 	}
 
+	// Once the ENI is created, tag it.
+	cache.TagENI(eniID, maxENIBackoffDelay)
+
 	attachmentID, err := cache.attachENI(eniID)
 	if err != nil {
 		derr := cache.deleteENI(eniID, maxENIBackoffDelay)
@@ -626,9 +638,6 @@ func (cache *EC2InstanceMetadataCache) AllocENI(useCustomCfg bool, sg []*string,
 		}
 		return "", errors.Wrap(err, "AllocENI: error attaching ENI")
 	}
-
-	// Once the ENI is attached, tag it.
-	cache.tagENI(eniID, maxENIBackoffDelay)
 
 	// Also change the ENI's attribute so that the ENI will be deleted when the instance is deleted.
 	attributeInput := &ec2.ModifyNetworkInterfaceAttributeInput{
@@ -732,7 +741,7 @@ func (cache *EC2InstanceMetadataCache) createENI(useCustomCfg bool, sg []*string
 	return aws.StringValue(result.NetworkInterface.NetworkInterfaceId), nil
 }
 
-func (cache *EC2InstanceMetadataCache) tagENI(eniID string, maxBackoffDelay time.Duration) {
+func (cache *EC2InstanceMetadataCache) TagENI(eniID string, maxBackoffDelay time.Duration) {
 	// Tag the ENI with "node.k8s.amazonaws.com/instance_id=<instance_id>"
 	tags := []*ec2.Tag{
 		{
@@ -1073,9 +1082,9 @@ func (cache *EC2InstanceMetadataCache) DescribeAllENIs() (DescribeAllENIsResult,
 		// Check IPv4 addresses
 		logOutOfSyncState(eniID, eniMetadata.IPv4Addresses, ec2res.PrivateIpAddresses)
 		tags := getTags(ec2res, eniMetadata.ENIID)
-		if len(tags) > 0 {
+		//if len(tags) > 0 {
 			tagMap[eniMetadata.ENIID] = tags
-		}
+		//}
 	}
 	return DescribeAllENIsResult{
 		ENIMetadata:     verifiedENIs,
@@ -1205,6 +1214,41 @@ func (cache *EC2InstanceMetadataCache) GetENILimit() (int, error) {
 		}
 	}
 	return eniLimits.ENILimit, nil
+}
+
+func (cache *EC2InstanceMetadataCache) TagInstance(instanceID string, maxBackoffDelay time.Duration) {
+	// Tag the ENI with "node.k8s.amazonaws.com/instance_id=<instance_id>"
+	tags := []*ec2.Tag{}
+
+	// If the CLUSTER_NAME env var is present,
+	// tag the ENI with "cluster.k8s.amazonaws.com/name=<cluster_name>"
+	clusterName := os.Getenv(clusterNameEnvVar)
+	if clusterName != "" {
+		tags = append(tags, &ec2.Tag{
+			Key:   aws.String(eniClusterTagKey),
+			Value: aws.String(clusterName),
+		})
+	}
+
+	input := &ec2.CreateTagsInput{
+		Resources: []*string{
+			aws.String(instanceID),
+		},
+		Tags: tags,
+	}
+
+	_ = retry.NWithBackoff(retry.NewSimpleBackoff(500*time.Millisecond, maxBackoffDelay, 0.3, 2), 5, func() error {
+		start := time.Now()
+		_, err := cache.ec2SVC.CreateTagsWithContext(context.Background(), input)
+		awsAPILatency.WithLabelValues("CreateTags", fmt.Sprint(err != nil), awsReqStatus(err)).Observe(msSince(start))
+		if err != nil {
+			awsAPIErrInc("CreateTags", err)
+			log.Warnf("Failed to tag the Instance %s:%s", instanceID, err)
+			return err
+		}
+		log.Debugf("Successfully tagged Instance: %s", instanceID)
+		return nil
+	})
 }
 
 // AllocIPAddresses allocates numIPs of IP address on an ENI
@@ -1489,6 +1533,12 @@ func (cache *EC2InstanceMetadataCache) GetPrimaryENI() string {
 func (cache *EC2InstanceMetadataCache) GetPrimaryENImac() string {
 	return cache.primaryENImac
 }
+
+// GetInstanceID returns the instance ID of the instance
+func (cache *EC2InstanceMetadataCache) GetInstanceID() string {
+	return cache.instanceID
+}
+
 
 //SetUnmanagedENIs Set unmanaged ENI set
 func (cache *EC2InstanceMetadataCache) SetUnmanagedENIs(eniIDs []string) {

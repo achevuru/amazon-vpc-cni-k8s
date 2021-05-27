@@ -233,6 +233,30 @@ func (c *IPAMContext) setUnmanagedENIs(tagMap map[string]awsutils.TagMap) {
 	c.awsClient.SetUnmanagedENIs(unmanagedENIlist)
 }
 
+// checkAndUpdateTags will check and update instance and cluster specific tags
+// on the current Node and ENIs attached to it
+func (c *IPAMContext) checkAndUpdateTags(tagMap map[string]awsutils.TagMap) {
+	log.Debugf("TagMap Count %s", len(tagMap))
+	if len(tagMap) == 0 {
+		return
+	}
+
+	//Tag Instance
+	//c.awsClient.TagInstance(c.awsClient.GetInstanceID(), time.Minute)
+
+	//Tag ENIs
+	for eniID, tags := range tagMap {
+		log.Debugf("Check Tag on ENI %s", eniID)
+		if val, ok := tags["cluster.k8s.amazonaws.com/name"]; ok && val == os.Getenv("CLUSTER_NAME") {
+			log.Debugf("ENI %s is already tagged with correct cluster tag", eniID)
+		} else {
+			log.Debugf("Tagging ENI %s with cluster tag", eniID)
+			//instanceTag[eniNodeTagKey] = instanceTagValue
+			c.awsClient.TagENI(eniID, time.Minute)
+		}
+	}
+}
+
 // ReconcileCooldownCache keep track of recently freed IPs to avoid reading stale EC2 metadata
 type ReconcileCooldownCache struct {
 	sync.RWMutex
@@ -367,6 +391,7 @@ func (c *IPAMContext) nodeInit() error {
 	c.awsClient.SetCNIUnmanagedENIs(metadataResult.MultiCardENIIDs)
 	c.setUnmanagedENIs(metadataResult.TagMap)
 	enis := c.filterUnmanagedENIs(metadataResult.ENIMetadata)
+	c.checkAndUpdateTags(metadataResult.TagMap)
 
 	for _, eni := range enis {
 		log.Debugf("Discovered ENI %s, trying to set it up", eni.ENIID)
