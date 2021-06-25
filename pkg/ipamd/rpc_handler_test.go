@@ -138,7 +138,7 @@ func TestServer_AddNetwork(t *testing.T) {
 			assert.Equal(t, tc.useExternalSNAT, addNetworkReply.UseExternalSNAT, tc.name)
 
 			expectedCIDRs := append([]string{vpcCIDR}, tc.snatExclusionCIDRs...)
-			assert.Equal(t, expectedCIDRs, addNetworkReply.VPCcidrs, tc.name)
+			assert.Equal(t, expectedCIDRs, addNetworkReply.VPCV4cidrs, tc.name)
 		}
 	}
 }

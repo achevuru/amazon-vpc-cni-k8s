@@ -50,9 +50,9 @@ func (m *MockNetworkAPIs) EXPECT() *MockNetworkAPIsMockRecorder {
 }
 
 // SetupNS mocks base method
-func (m *MockNetworkAPIs) SetupNS(arg0, arg1, arg2 string, arg3 *net.IPNet, arg4 int, arg5 []string, arg6 bool, arg7 int, arg8 logger.Logger) error {
+func (m *MockNetworkAPIs) SetupNS(arg0, arg1, arg2 string, arg3, arg4 *net.IPNet, arg5 int, arg6 []string, arg7 bool, arg8 int, arg9 logger.Logger) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetupNS", arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
+	ret := m.ctrl.Call(m, "SetupNS", arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
@@ -64,7 +64,7 @@ func (mr *MockNetworkAPIsMockRecorder) SetupNS(arg0, arg1, arg2, arg3, arg4, arg
 }
 
 // SetupPodENINetwork mocks base method
-func (m *MockNetworkAPIs) SetupPodENINetwork(arg0, arg1, arg2 string, arg3 *net.IPNet, arg4 int, arg5, arg6 string, arg7, arg8 int, arg9 logger.Logger) error {
+func (m *MockNetworkAPIs) SetupPodENINetwork(arg0, arg1, arg2 string, arg3, arg4 *net.IPNet, arg5 int, arg6, arg7 string, arg8, arg9 int, arg10 logger.Logger) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SetupPodENINetwork", arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
 	ret0, _ := ret[0].(error)

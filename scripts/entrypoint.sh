@@ -61,6 +61,7 @@ AWS_VPC_K8S_CNI_VETHPREFIX=${AWS_VPC_K8S_CNI_VETHPREFIX:-"eni"}
 AWS_VPC_ENI_MTU=${AWS_VPC_ENI_MTU:-"9001"}
 AWS_VPC_K8S_PLUGIN_LOG_FILE=${AWS_VPC_K8S_PLUGIN_LOG_FILE:-"/var/log/aws-routed-eni/plugin.log"}
 AWS_VPC_K8S_PLUGIN_LOG_LEVEL=${AWS_VPC_K8S_PLUGIN_LOG_LEVEL:-"Debug"}
+AWS_VPC_K8S_EGRESS_V4_PLUGIN_LOG_FILE=${AWS_VPC_K8S_EGRESS_V4_PLUGIN_LOG_FILE:-"/var/log/aws-routed-eni/egress-v4-plugin.log"}
 
 AWS_VPC_K8S_CNI_CONFIGURE_RPFILTER=${AWS_VPC_K8S_CNI_CONFIGURE_RPFILTER:-"true"}
 
@@ -70,7 +71,7 @@ validate_env_var
 wait_for_ipam() {
     while :
     do
-        if ./grpc-health-probe -addr 127.0.0.1:50051 >/dev/null 2>&1; then
+        if ./grpc-health-probe -addr 127.0.0.1:50051 > /dev/null 2>&1; then
             return 0
         fi
         # We sleep for 1 second between each retry
@@ -82,15 +83,16 @@ wait_for_ipam() {
 if [[ "$AWS_VPC_K8S_CNI_CONFIGURE_RPFILTER" != "false" ]]; then
     # Copy files
     log_in_json info "Copying CNI plugin binaries ... "
-    PLUGIN_BINS="loopback portmap bandwidth aws-cni-support.sh"
+    PLUGIN_BINS="loopback portmap bandwidth host-local aws-cni-support.sh"
     for b in $PLUGIN_BINS; do
         # Install the binary
         install "$b" "$HOST_CNI_BIN_PATH"
     done
 fi
 
-log_in_json info "Install CNI binary.."
+log_in_json info "Install CNI binaries.."
 install aws-cni "$HOST_CNI_BIN_PATH"
+install egress-v4-cni "$HOST_CNI_BIN_PATH"
 
 log_in_json info "Starting IPAM daemon in the background ... "
 ./aws-k8s-agent | tee -i "$AGENT_LOG_PATH" 2>&1 &
@@ -111,6 +113,7 @@ sed \
   -e s~__MTU__~"${AWS_VPC_ENI_MTU}"~g \
   -e s~__PLUGINLOGFILE__~"${AWS_VPC_K8S_PLUGIN_LOG_FILE}"~g \
   -e s~__PLUGINLOGLEVEL__~"${AWS_VPC_K8S_PLUGIN_LOG_LEVEL}"~g \
+  -e s~__EGRESSV4PLUGINLOGFILE__~"${AWS_VPC_K8S_EGRESS_V4_PLUGIN_LOG_FILE}"~g \
   10-aws.conflist > "$HOST_CNI_CONFDIR_PATH/10-aws.conflist"
 
 log_in_json info "Successfully copied CNI plugin binary and config file."

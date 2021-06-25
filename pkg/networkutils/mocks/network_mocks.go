@@ -138,15 +138,15 @@ func (mr *MockNetworkAPIsMockRecorder) SetupENINetwork(arg0, arg1, arg2, arg3 in
 }
 
 // SetupHostNetwork mocks base method
-func (m *MockNetworkAPIs) SetupHostNetwork(arg0 []string, arg1 string, arg2 *net.IP, arg3 bool) error {
+func (m *MockNetworkAPIs) SetupHostNetwork(arg0 []string, arg1 string, arg2 *net.IP, arg3, arg4, arg5 bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetupHostNetwork", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "SetupHostNetwork", arg0, arg1, arg2, arg3, arg4, arg5)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetupHostNetwork indicates an expected call of SetupHostNetwork
-func (mr *MockNetworkAPIsMockRecorder) SetupHostNetwork(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+func (mr *MockNetworkAPIsMockRecorder) SetupHostNetwork(arg0, arg1, arg2, arg3, arg4, arg5 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetupHostNetwork", reflect.TypeOf((*MockNetworkAPIs)(nil).SetupHostNetwork), arg0, arg1, arg2, arg3)
 }

@@ -120,7 +120,7 @@ func TestNodeInit(t *testing.T) {
 	primaryIP := net.ParseIP(ipaddr01)
 	m.awsutils.EXPECT().GetVPCIPv4CIDRs().AnyTimes().Return(cidrs, nil)
 	m.awsutils.EXPECT().GetPrimaryENImac().Return("")
-	m.network.EXPECT().SetupHostNetwork(cidrs, "", &primaryIP, false).Return(nil)
+	m.network.EXPECT().SetupHostNetwork(cidrs, "", &primaryIP, false, true, false).Return(nil)
 
 	m.awsutils.EXPECT().GetPrimaryENI().AnyTimes().Return(primaryENIid)
 
@@ -183,7 +183,7 @@ func TestNodeInitwithPDenabled(t *testing.T) {
 		networkClient:              m.network,
 		dataStore:                  datastore.NewDataStore(log, datastore.NewTestCheckpoint(fakeCheckpoint), true),
 		myNodeName:                 myNodeName,
-		enableIpv4PrefixDelegation: true,
+		enablePrefixDelegation: true,
 	}
 	mockContext.dataStore.CheckpointMigrationPhase = 2
 
@@ -202,7 +202,7 @@ func TestNodeInitwithPDenabled(t *testing.T) {
 	primaryIP := net.ParseIP(ipaddr01)
 	m.awsutils.EXPECT().GetVPCIPv4CIDRs().AnyTimes().Return(cidrs, nil)
 	m.awsutils.EXPECT().GetPrimaryENImac().Return("")
-	m.network.EXPECT().SetupHostNetwork(cidrs, "", &primaryIP, false).Return(nil)
+	m.network.EXPECT().SetupHostNetwork(cidrs, "", &primaryIP, false, true, false).Return(nil)
 
 	m.awsutils.EXPECT().GetPrimaryENI().AnyTimes().Return(primaryENIid)
 
@@ -231,6 +231,7 @@ func TestNodeInitwithPDenabled(t *testing.T) {
 		Spec:       v1.NodeSpec{},
 		Status:     v1.NodeStatus{},
 	}
+	//ctx := context.Background()
 	_, _ = m.clientset.CoreV1().Nodes().Create(&fakeNode)
 
 	err := mockContext.nodeInit()
@@ -429,7 +430,7 @@ func testIncreasePrefixPool(t *testing.T, useENIConfig bool) {
 		eniConfig:                  m.eniconfig,
 		primaryIP:                  make(map[string]string),
 		terminating:                int32(0),
-		enableIpv4PrefixDelegation: true,
+		enablePrefixDelegation: true,
 	}
 
 	mockContext.dataStore = testDatastorewithPrefix()
@@ -672,7 +673,7 @@ func TestNodePrefixPoolReconcile(t *testing.T) {
 		networkClient:              m.network,
 		primaryIP:                  make(map[string]string),
 		terminating:                int32(0),
-		enableIpv4PrefixDelegation: true,
+		enablePrefixDelegation: true,
 	}
 
 	mockContext.dataStore = testDatastorewithPrefix()
@@ -853,7 +854,7 @@ func TestGetWarmIPTargetStatewithPDenabled(t *testing.T) {
 		networkClient:              m.network,
 		primaryIP:                  make(map[string]string),
 		terminating:                int32(0),
-		enableIpv4PrefixDelegation: true,
+		enablePrefixDelegation: true,
 	}
 
 	mockContext.dataStore = testDatastorewithPrefix()
@@ -927,7 +928,7 @@ func TestIPAMContext_nodeIPPoolTooLow(t *testing.T) {
 				maxENI:                     -1,
 				warmENITarget:              tt.fields.warmENITarget,
 				warmIPTarget:               tt.fields.warmIPTarget,
-				enableIpv4PrefixDelegation: false,
+				enablePrefixDelegation: false,
 			}
 			if got := c.isDatastorePoolTooLow(); got != tt.want {
 				t.Errorf("nodeIPPoolTooLow() = %v, want %v", got, tt.want)
@@ -970,7 +971,7 @@ func TestIPAMContext_nodePrefixPoolTooLow(t *testing.T) {
 				maxIPsPerENI:               tt.fields.maxIPsPerENI,
 				maxENI:                     -1,
 				warmPrefixTarget:           tt.fields.warmPrefixTarget,
-				enableIpv4PrefixDelegation: true,
+				enablePrefixDelegation: true,
 			}
 			if got := c.isDatastorePoolTooLow(); got != tt.want {
 				t.Errorf("nodeIPPoolTooLow() = %v, want %v", got, tt.want)
@@ -1233,7 +1234,7 @@ func TestNodePrefixPoolReconcileBadIMDSData(t *testing.T) {
 		networkClient:              m.network,
 		primaryIP:                  make(map[string]string),
 		terminating:                int32(0),
-		enableIpv4PrefixDelegation: true,
+		enablePrefixDelegation: true,
 	}
 
 	mockContext.dataStore = testDatastorewithPrefix()
@@ -1244,7 +1245,7 @@ func TestNodePrefixPoolReconcileBadIMDSData(t *testing.T) {
 	eniID := primaryENIMetadata.ENIID
 	_ = mockContext.dataStore.AddENI(eniID, primaryENIMetadata.DeviceNumber, true, false, false)
 	mockContext.primaryIP[eniID] = testAddr1
-	mockContext.addENIprefixesToDataStore(primaryENIMetadata.IPv4Prefixes, eniID)
+	mockContext.addENIv4prefixesToDataStore(primaryENIMetadata.IPv4Prefixes, eniID)
 	curENIs := mockContext.dataStore.GetENIInfos()
 	assert.Equal(t, 1, len(curENIs.ENIs))
 	assert.Equal(t, 16, curENIs.TotalIPs)
@@ -1501,6 +1502,8 @@ func TestIPAMContext_askForTrunkENIIfNeeded(t *testing.T) {
 	m := setup(t)
 	defer m.ctrl.Finish()
 
+	//ctx := context.Background()
+
 	mockContext := &IPAMContext{
 		k8sClient:     m.clientset,
 		dataStore:     datastore.NewDataStore(log, datastore.NewTestCheckpoint(datastore.CheckpointData{Version: datastore.CheckpointFormatVersion}), false),
@@ -1512,15 +1515,16 @@ func TestIPAMContext_askForTrunkENIIfNeeded(t *testing.T) {
 		myNodeName:    myNodeName,
 	}
 
-	labels := make(map[string]string)
+	//labels := make(map[string]string)
+	/*
 	fakeNode := v1.Node{
 		TypeMeta:   metav1.TypeMeta{Kind: "Node"},
 		ObjectMeta: metav1.ObjectMeta{Name: myNodeName, Labels: labels},
 		Spec:       v1.NodeSpec{},
 		Status:     v1.NodeStatus{},
 	}
-	_, _ = m.clientset.CoreV1().Nodes().Create(&fakeNode)
-
+	_, _ = m.clientset.CoreV1().Nodes().Create(ctx, &fakeNode, metav1.CreateOptions{})
+*/
 	_ = mockContext.dataStore.AddENI("eni-1", 1, true, false, false)
 	// If ENABLE_POD_ENI is not set, nothing happens
 	mockContext.askForTrunkENIIfNeeded()

@@ -170,22 +170,37 @@ func add(args *skel.CmdArgs, cniTypes typeswrapper.CNITYPES, grpcClient grpcwrap
 	log.Infof("Received add network response for container %s interface %s: %+v",
 		args.ContainerID, args.IfName, r)
 
-	addr := &net.IPNet{
-		IP:   net.ParseIP(r.IPv4Addr),
-		Mask: net.IPv4Mask(255, 255, 255, 255),
+	//We will let the values in result struct guide us in terms of IP Address Family configured
+	var v4Addr, v6Addr, addr *net.IPNet
+    var addrFamily string
+
+    if r.IPv4Addr != "" {
+		v4Addr = &net.IPNet{
+			IP:   net.ParseIP(r.IPv4Addr),
+			Mask: net.CIDRMask(32, 32),
+		}
+		addrFamily = "4"
+		addr = v4Addr
+	} else if r.IPv6Addr != "" {
+		v6Addr = &net.IPNet{
+			IP:   net.ParseIP(r.IPv6Addr),
+			Mask: net.CIDRMask(128, 128),
+		}
+		addrFamily = "6"
+		addr = v6Addr
 	}
 
 	if r.PodVlanId != 0 {
 		hostVethName := generateHostVethName("vlan", string(k8sArgs.K8S_POD_NAMESPACE), string(k8sArgs.K8S_POD_NAME))
 
-		err = driverClient.SetupPodENINetwork(hostVethName, args.IfName, args.Netns, addr, int(r.PodVlanId), r.PodENIMAC,
+		err = driverClient.SetupPodENINetwork(hostVethName, args.IfName, args.Netns, v4Addr, v6Addr, int(r.PodVlanId), r.PodENIMAC,
 			r.PodENISubnetGW, int(r.ParentIfIndex), mtu, log)
 	} else {
 		// build hostVethName
 		// Note: the maximum length for linux interface name is 15
 		hostVethName := generateHostVethName(conf.VethPrefix, string(k8sArgs.K8S_POD_NAMESPACE), string(k8sArgs.K8S_POD_NAME))
 
-		err = driverClient.SetupNS(hostVethName, args.IfName, args.Netns, addr, int(r.DeviceNumber), r.VPCcidrs, r.UseExternalSNAT, mtu, log)
+		err = driverClient.SetupNS(hostVethName, args.IfName, args.Netns, v4Addr, v6Addr, int(r.DeviceNumber), r.VPCV4Cidrs, r.UseExternalSNAT, mtu, log)
 	}
 
 	if err != nil {
@@ -218,7 +233,7 @@ func add(args *skel.CmdArgs, cniTypes typeswrapper.CNITYPES, grpcClient grpcwrap
 
 	ips := []*current.IPConfig{
 		{
-			Version: "4",
+			Version: addrFamily,
 			Address: *addr,
 		},
 	}

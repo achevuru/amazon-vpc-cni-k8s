@@ -59,6 +59,11 @@ func (imds TypedIMDS) GetLocalIPv4(ctx context.Context) (net.IP, error) {
 	return imds.getIP(ctx, "local-ipv4")
 }
 
+// GetLocalIPv6 returns the private (primary) IPv6 address of the instance.
+func (imds TypedIMDS) GetLocalIPv6(ctx context.Context) (net.IP, error) {
+	return imds.getIP(ctx, "local-ipv6")
+}
+
 // GetInstanceID returns the ID of this instance.
 func (imds TypedIMDS) GetInstanceID(ctx context.Context) (string, error) {
 	return imds.GetMetadataWithContext(ctx, "instance-id")

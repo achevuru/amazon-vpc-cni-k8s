@@ -121,7 +121,8 @@ var log = logger.Get()
 // NetworkAPIs defines the host level and the ENI level network related operations
 type NetworkAPIs interface {
 	// SetupNodeNetwork performs node level network configuration
-	SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool) error
+	SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool,
+		v4Enabled bool, v6Enabled bool) error
 	// SetupENINetwork performs ENI level network configuration. Not needed on the primary ENI
 	SetupENINetwork(eniIP string, mac string, deviceNumber int, subnetCIDR string) error
 	UseExternalSNAT() bool
@@ -143,7 +144,7 @@ type linuxNetwork struct {
 
 	netLink     netlinkwrapper.NetLink
 	ns          nswrapper.NS
-	newIptables func() (iptablesIface, error)
+	newIptables func(IPProtocol iptables.Protocol) (iptablesIface, error)
 	mainENIMark uint32
 	procSys     procsyswrapper.ProcSys
 }
@@ -182,8 +183,8 @@ func New() NetworkAPIs {
 
 		netLink: netlinkwrapper.NewNetLink(),
 		ns:      nswrapper.NewNS(),
-		newIptables: func() (iptablesIface, error) {
-			ipt, err := iptables.New()
+		newIptables: func(IPProtocol iptables.Protocol) (iptablesIface, error) {
+			ipt, err := iptables.NewWithProtocol(IPProtocol)
 			return ipt, err
 		},
 		procSys: procsyswrapper.NewProcSys(),
@@ -214,12 +215,14 @@ func findPrimaryInterfaceName(primaryMAC string) (string, error) {
 }
 
 // SetupHostNetwork performs node level network configuration
-func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool) error {
+func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool,
+	v4Enabled bool, v6Enabled bool) error {
 	log.Info("Setting up host network... ")
 
 	var err error
 	primaryIntf := "eth0"
-	if n.nodePortSupportEnabled {
+	//RP Filter setting is only needed if IPv4 mode is enabled.
+	if v4Enabled && n.nodePortSupportEnabled {
 		primaryIntf, err = findPrimaryInterfaceName(primaryMAC)
 		if err != nil {
 			return errors.Wrapf(err, "failed to SetupHostNetwork")
@@ -247,6 +250,13 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 		}
 	}
 
+	ipFamily := unix.AF_INET
+	ipProtocol := iptables.ProtocolIPv4
+	if v6Enabled {
+		ipFamily = unix.AF_INET6
+		ipProtocol = iptables.ProtocolIPv6
+	}
+
 	link, err := linkByMac(primaryMAC, n.netLink, retryLinkByMacInterval)
 	if err != nil {
 		return errors.Wrapf(err, "setupHostNetwork: failed to find the link primary ENI with MAC address %s", primaryMAC)
@@ -265,6 +275,7 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 	mainENIRule.Mask = int(n.mainENIMark)
 	mainENIRule.Table = mainRoutingTable
 	mainENIRule.Priority = hostRulePriority
+	mainENIRule.Family = ipFamily
 	// If this is a restart, cleanup previous rule first
 	err = n.netLink.RuleDel(mainENIRule)
 	if err != nil && !containsNoSuchRule(err) {
@@ -282,7 +293,8 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 
 	// If we want per pod ENIs, we need to give pod ENIs veth bridges a lower priority that the local table,
 	// or the rp_filter check will fail.
-	if enablePodENI {
+	// SGPP support is limited to IPv4 Mode for now.
+	if v4Enabled && enablePodENI {
 		localRule := n.netLink.NewRule()
 		localRule.Table = localRouteTable
 		localRule.Priority = localRulePriority
@@ -299,122 +311,124 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 		}
 	}
 
-	ipt, err := n.newIptables()
+	ipt, err := n.newIptables(ipProtocol)
 	if err != nil {
 		return errors.Wrap(err, "host network setup: failed to create iptables")
 	}
-
-	type snatCIDR struct {
-		cidr        string
-		isExclusion bool
-	}
-	var allCIDRs []snatCIDR
-	for _, cidr := range vpcCIDRs {
-		log.Debugf("Adding %s CIDR to NAT chain", cidr)
-		allCIDRs = append(allCIDRs, snatCIDR{cidr: cidr, isExclusion: false})
-	}
-	for _, cidr := range n.excludeSNATCIDRs {
-		log.Debugf("Adding %s Excluded CIDR to NAT chain", cidr)
-		allCIDRs = append(allCIDRs, snatCIDR{cidr: cidr, isExclusion: true})
-	}
-
-	// if excludeSNATCIDRs or vpcCIDRs have changed they need to be cleared
-	snatStaleRulesToCheck, err := listCurrentSNATRules(ipt)
-	if err != nil {
-		return errors.Wrapf(err, "host network setup: failed to get SNAT chain rules to clear")
-	}
-
-	log.Debugf("Total CIDRs to program - %d", len(allCIDRs))
-	// build IPTABLES chain for SNAT of non-VPC outbound traffic and excluded CIDRs
-	var chains []string
-	for i := 0; i <= len(allCIDRs); i++ {
-		chain := fmt.Sprintf("AWS-SNAT-CHAIN-%d", i)
-		log.Debugf("Setup Host Network: iptables -N %s -t nat", chain)
-		if err := ipt.NewChain("nat", chain); err != nil && !containChainExistErr(err) {
-			log.Errorf("ipt.NewChain error for chain [%s]: %v", chain, err)
-			return errors.Wrapf(err, "host network setup: failed to add chain")
-		}
-		chains = append(chains, chain)
-	}
-
-	// build SNAT rules for outbound non-VPC traffic
 	var iptableRules []iptablesRule
-	log.Debugf("Setup Host Network: iptables -A POSTROUTING -m comment --comment \"AWS SNAT CHAIN\" -j AWS-SNAT-CHAIN-0")
-	iptableRules = append(iptableRules, iptablesRule{
-		name:        "first SNAT rules for non-VPC outbound traffic",
-		shouldExist: !n.useExternalSNAT,
-		table:       "nat",
-		chain:       "POSTROUTING",
-		rule: []string{
-			"-m", "comment", "--comment", "AWS SNAT CHAIN", "-j", "AWS-SNAT-CHAIN-0",
-		}})
 
-	for i, cidr := range allCIDRs {
-		curChain := chains[i]
-		curName := fmt.Sprintf("[%d] AWS-SNAT-CHAIN", i)
-		nextChain := chains[i+1]
-		comment := "AWS SNAT CHAIN"
-		if cidr.isExclusion {
-			comment += " EXCLUSION"
+	if v4Enabled {
+		type snatCIDR struct {
+			cidr        string
+			isExclusion bool
 		}
-		log.Debugf("Setup Host Network: iptables -A %s ! -d %s -t nat -j %s", curChain, cidr, nextChain)
+		var allCIDRs []snatCIDR
+		for _, cidr := range vpcCIDRs {
+			log.Debugf("Adding %s CIDR to NAT chain", cidr)
+			allCIDRs = append(allCIDRs, snatCIDR{cidr: cidr, isExclusion: false})
+		}
+		for _, cidr := range n.excludeSNATCIDRs {
+			log.Debugf("Adding %s Excluded CIDR to NAT chain", cidr)
+			allCIDRs = append(allCIDRs, snatCIDR{cidr: cidr, isExclusion: true})
+		}
 
+		// if excludeSNATCIDRs or vpcCIDRs have changed they need to be cleared
+		snatStaleRulesToCheck, err := listCurrentSNATRules(ipt)
+		if err != nil {
+			return errors.Wrapf(err, "host network setup: failed to get SNAT chain rules to clear")
+		}
+
+		log.Debugf("Total CIDRs to program - %d", len(allCIDRs))
+		// build IPTABLES chain for SNAT of non-VPC outbound traffic and excluded CIDRs
+		var chains []string
+		for i := 0; i <= len(allCIDRs); i++ {
+			chain := fmt.Sprintf("AWS-SNAT-CHAIN-%d", i)
+			log.Debugf("Setup Host Network: iptables -N %s -t nat", chain)
+			if err := ipt.NewChain("nat", chain); err != nil && !containChainExistErr(err) {
+				log.Errorf("ipt.NewChain error for chain [%s]: %v", chain, err)
+				return errors.Wrapf(err, "host network setup: failed to add chain")
+			}
+			chains = append(chains, chain)
+		}
+
+		// build SNAT rules for outbound non-VPC traffic
+		log.Debugf("Setup Host Network: iptables -A POSTROUTING -m comment --comment \"AWS SNAT CHAIN\" -j AWS-SNAT-CHAIN-0")
 		iptableRules = append(iptableRules, iptablesRule{
-			name:        curName,
+			name:        "first SNAT rules for non-VPC outbound traffic",
 			shouldExist: !n.useExternalSNAT,
 			table:       "nat",
-			chain:       curChain,
+			chain:       "POSTROUTING",
 			rule: []string{
-				"!", "-d", cidr.cidr, "-m", "comment", "--comment", comment, "-j", nextChain,
+				"-m", "comment", "--comment", "AWS SNAT CHAIN", "-j", "AWS-SNAT-CHAIN-0",
 			}})
-	}
 
-	// Prepare the Desired Rule for SNAT Rule for non-pod ENIs
-	snatRule := []string{"!", "-o", "vlan+",
-		"-m", "comment", "--comment", "AWS, SNAT",
-		"-m", "addrtype", "!", "--dst-type", "LOCAL",
-		"-j", "SNAT", "--to-source", primaryAddr.String()}
-	if n.typeOfSNAT == randomHashSNAT {
-		snatRule = append(snatRule, "--random")
-	}
-	if n.typeOfSNAT == randomPRNGSNAT {
-		if ipt.HasRandomFully() {
-			snatRule = append(snatRule, "--random-fully")
-		} else {
-			log.Warn("prng (--random-fully) requested, but iptables version does not support it. " +
-				"Falling back to hashrandom (--random)")
+		for i, cidr := range allCIDRs {
+			curChain := chains[i]
+			curName := fmt.Sprintf("[%d] AWS-SNAT-CHAIN", i)
+			nextChain := chains[i+1]
+			comment := "AWS SNAT CHAIN"
+			if cidr.isExclusion {
+				comment += " EXCLUSION"
+			}
+			log.Debugf("Setup Host Network: iptables -A %s ! -d %s -t nat -j %s", curChain, cidr, nextChain)
+
+			iptableRules = append(iptableRules, iptablesRule{
+				name:        curName,
+				shouldExist: !n.useExternalSNAT && v4Enabled,
+				table:       "nat",
+				chain:       curChain,
+				rule: []string{
+					"!", "-d", cidr.cidr, "-m", "comment", "--comment", comment, "-j", nextChain,
+				}})
+		}
+
+		// Prepare the Desired Rule for SNAT Rule for non-pod ENIs
+		snatRule := []string{"!", "-o", "vlan+",
+			"-m", "comment", "--comment", "AWS, SNAT",
+			"-m", "addrtype", "!", "--dst-type", "LOCAL",
+			"-j", "SNAT", "--to-source", primaryAddr.String()}
+		if n.typeOfSNAT == randomHashSNAT {
 			snatRule = append(snatRule, "--random")
 		}
-	}
-
-	lastChain := chains[len(chains)-1]
-	iptableRules = append(iptableRules, iptablesRule{
-		name:        "last SNAT rule for non-VPC outbound traffic",
-		shouldExist: !n.useExternalSNAT,
-		table:       "nat",
-		chain:       lastChain,
-		rule:        snatRule,
-	})
-
-	var snatStaleRulesToClear []iptablesRule
-	log.Debugf("Setup Host Network: synchronising SNAT stale rules")
-	for _, staleRule := range snatStaleRulesToCheck {
-		keepRule := false
-		for _, newRule := range iptableRules {
-			if staleRule.chain == newRule.chain && reflect.DeepEqual(newRule.rule, staleRule.rule) {
-				log.Debugf("Setup Host Network: active rule found: %s", staleRule)
-				keepRule = true
-				break
+		if n.typeOfSNAT == randomPRNGSNAT {
+			if ipt.HasRandomFully() {
+				snatRule = append(snatRule, "--random-fully")
+			} else {
+				log.Warn("prng (--random-fully) requested, but iptables version does not support it. " +
+					"Falling back to hashrandom (--random)")
+				snatRule = append(snatRule, "--random")
 			}
 		}
-		if !keepRule {
-			log.Debugf("Setup Host Network: stale rule found: %s", staleRule)
-			snatStaleRulesToClear = append(snatStaleRulesToClear, staleRule)
-		}
-	}
 
-	iptableRules = append(iptableRules, snatStaleRulesToClear...)
-	log.Debugf("iptableRules: %v", iptableRules)
+		lastChain := chains[len(chains)-1]
+		iptableRules = append(iptableRules, iptablesRule{
+			name:        "last SNAT rule for non-VPC outbound traffic",
+			shouldExist: !n.useExternalSNAT && v4Enabled,
+			table:       "nat",
+			chain:       lastChain,
+			rule:        snatRule,
+		})
+
+		var snatStaleRulesToClear []iptablesRule
+		log.Debugf("Setup Host Network: synchronising SNAT stale rules")
+		for _, staleRule := range snatStaleRulesToCheck {
+			keepRule := false
+			for _, newRule := range iptableRules {
+				if staleRule.chain == newRule.chain && reflect.DeepEqual(newRule.rule, staleRule.rule) {
+					log.Debugf("Setup Host Network: active rule found: %s", staleRule)
+					keepRule = true
+					break
+				}
+			}
+			if !keepRule {
+				log.Debugf("Setup Host Network: stale rule found: %s", staleRule)
+				snatStaleRulesToClear = append(snatStaleRulesToClear, staleRule)
+			}
+		}
+
+		iptableRules = append(iptableRules, snatStaleRulesToClear...)
+		log.Debugf("iptableRules: %v", iptableRules)
+	}
 
 	iptableRules = append(iptableRules, iptablesRule{
 		name:        "connmark for primary ENI",
