@@ -16,6 +16,7 @@ package driver
 
 import (
 	"fmt"
+	"github.com/prometheus/common/log"
 	"net"
 	"os"
 	"syscall"
@@ -47,9 +48,9 @@ const (
 
 // NetworkAPIs defines network API calls
 type NetworkAPIs interface {
-	SetupNS(hostVethName string, contVethName string, netnsPath string, addr *net.IPNet, deviceNumber int, vpcCIDRs []string, useExternalSNAT bool, mtu int, log logger.Logger) error
+	SetupNS(hostVethName string, contVethName string, netnsPath string, v4Addr *net.IPNet, v6Addr *net.IPNet, deviceNumber int, vpcCIDRs []string, useExternalSNAT bool, mtu int, log logger.Logger) error
 	TeardownNS(addr *net.IPNet, deviceNumber int, log logger.Logger) error
-	SetupPodENINetwork(hostVethName string, contVethName string, netnsPath string, addr *net.IPNet, vlanID int, eniMAC string,
+	SetupPodENINetwork(hostVethName string, contVethName string, netnsPath string, v4Addr *net.IPNet, v6Addr *net.IPNet, vlanID int, eniMAC string,
 		subnetGW string, parentIfIndex int, mtu int, log logger.Logger) error
 	TeardownPodENINetwork(vlanID int, log logger.Logger) error
 }
@@ -74,17 +75,19 @@ func New() NetworkAPIs {
 type createVethPairContext struct {
 	contVethName string
 	hostVethName string
-	addr         *net.IPNet
+	v4Addr       *net.IPNet
+	v6Addr       *net.IPNet
 	netLink      netlinkwrapper.NetLink
 	ip           ipwrapper.IP
 	mtu          int
 }
 
-func newCreateVethPairContext(contVethName string, hostVethName string, addr *net.IPNet, mtu int) *createVethPairContext {
+func newCreateVethPairContext(contVethName string, hostVethName string, v4Addr *net.IPNet, v6Addr *net.IPNet, mtu int) *createVethPairContext {
 	return &createVethPairContext{
 		contVethName: contVethName,
 		hostVethName: hostVethName,
-		addr:         addr,
+		v4Addr:       v4Addr,
+		v6Addr:       v6Addr,
 		netLink:      netlinkwrapper.NewNetLink(),
 		ip:           ipwrapper.NewIP(),
 		mtu:          mtu,
@@ -132,8 +135,21 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	// # ip route show
 	// default via 169.254.1.1 dev eth0
 	// 169.254.1.1 dev eth0
-	gw := net.IPv4(169, 254, 1, 1)
-	gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(32, 32)}
+	var gwIP string
+	var maskLen int
+	var addr *netlink.Addr
+	if createVethContext.v4Addr != nil {
+		gwIP = "169.254.1.1"
+		maskLen = 32
+		addr =  &netlink.Addr{IPNet: createVethContext.v4Addr}
+	} else if createVethContext.v6Addr != nil {
+		gwIP = "fe80::1 "
+		maskLen = 128
+		addr =  &netlink.Addr{IPNet: createVethContext.v6Addr}
+	}
+
+	gw := net.ParseIP(gwIP)
+	gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(maskLen, maskLen)}
 
 	if err = createVethContext.netLink.RouteReplace(&netlink.Route{
 		LinkIndex: contVeth.Attrs().Index,
@@ -142,24 +158,31 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 		return errors.Wrap(err, "setup NS network: failed to add default gateway")
 	}
 
-	// Add a default route via dummy next hop(169.254.1.1). Then all outgoing traffic will be routed by this
-	// default route via dummy next hop (169.254.1.1).
+	// Add a default route via dummy next hop(169.254.1.1 or fe80::1). Then all outgoing traffic will be routed by this
+	// default route via dummy next hop (169.254.1.1 or fe80::1).
 	if err = createVethContext.ip.AddDefaultRoute(gwNet.IP, contVeth); err != nil {
 		return errors.Wrap(err, "setup NS network: failed to add default route")
 	}
 
-	if err = createVethContext.netLink.AddrAdd(contVeth, &netlink.Addr{IPNet: createVethContext.addr}); err != nil {
+	//TODO - Make Sure disable_ipv6 is set to 0 on container veth and loopback interface(lo) in IPv6 mode.
+	//Maybe already enabled by default. But check while testing.
+
+	if err = createVethContext.netLink.AddrAdd(contVeth, addr); err != nil {
 		return errors.Wrapf(err, "setup NS network: failed to add IP addr to %q", createVethContext.contVethName)
 	}
 
 	// add static ARP entry for default gateway
 	// we are using routed mode on the host and container need this static ARP entry to resolve its default gateway.
+	//TODO - How about v6? --> Need to set Family in neigh struct. However, if Family is left to 0 then the neighadd
+	//function will derive the Family from the IP address passed. (v4 or v6)
+
 	neigh := &netlink.Neigh{
 		LinkIndex:    contVeth.Attrs().Index,
 		State:        netlink.NUD_PERMANENT,
 		IP:           gwNet.IP,
 		HardwareAddr: hostVeth.Attrs().HardwareAddr,
 	}
+
 
 	if err = createVethContext.netLink.NeighAdd(neigh); err != nil {
 		return errors.Wrap(err, "setup NS network: failed to add static ARP")
@@ -174,23 +197,32 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 }
 
 // SetupNS wires up linux networking for a pod's network
-func (os *linuxNetwork) SetupNS(hostVethName string, contVethName string, netnsPath string, addr *net.IPNet, deviceNumber int, vpcCIDRs []string, useExternalSNAT bool, mtu int, log logger.Logger) error {
+func (os *linuxNetwork) SetupNS(hostVethName string, contVethName string, netnsPath string, v4Addr *net.IPNet, v6Addr *net.IPNet, deviceNumber int, vpcCIDRs []string, useExternalSNAT bool, mtu int, log logger.Logger) error {
 	log.Debugf("SetupNS: hostVethName=%s, contVethName=%s, netnsPath=%s, deviceNumber=%d, mtu=%d", hostVethName, contVethName, netnsPath, deviceNumber, mtu)
-	return setupNS(hostVethName, contVethName, netnsPath, addr, deviceNumber, vpcCIDRs, useExternalSNAT, os.netLink, os.ns, mtu, log, os.procSys)
+	return setupNS(hostVethName, contVethName, netnsPath, v4Addr, v6Addr, deviceNumber, vpcCIDRs, useExternalSNAT, os.netLink, os.ns, mtu, log, os.procSys)
 }
 
-func setupNS(hostVethName string, contVethName string, netnsPath string, addr *net.IPNet, deviceNumber int, vpcCIDRs []string, useExternalSNAT bool,
+func setupNS(hostVethName string, contVethName string, netnsPath string, v4Addr *net.IPNet, v6Addr *net.IPNet, deviceNumber int, vpcCIDRs []string, useExternalSNAT bool,
 	netLink netlinkwrapper.NetLink, ns nswrapper.NS, mtu int, log logger.Logger, procSys procsyswrapper.ProcSys) error {
 
-	hostVeth, err := setupVeth(hostVethName, contVethName, netnsPath, addr, netLink, ns, mtu, procSys, log)
+	hostVeth, err := setupVeth(hostVethName, contVethName, netnsPath, v4Addr, v6Addr, netLink, ns, mtu, procSys, log)
 	if err != nil {
 		return errors.Wrapf(err, "setupNS network: failed to setup veth pair.")
 	}
 
 	log.Debugf("Setup host route outgoing hostVeth, LinkIndex %d", hostVeth.Attrs().Index)
-	addrHostAddr := &net.IPNet{
-		IP:   addr.IP,
-		Mask: net.CIDRMask(32, 32)}
+
+	var addrHostAddr *net.IPNet
+	//TODO - If/else as we either support v4 or v6 in initial launch
+	if v4Addr.IP.To4() != nil {
+		addrHostAddr = &net.IPNet{
+			IP:   v4Addr.IP,
+			Mask: net.CIDRMask(32, 32)}
+	} else if v6Addr.IP.To16() != nil {
+		addrHostAddr = &net.IPNet{
+			IP:   v6Addr.IP,
+			Mask: net.CIDRMask(128, 128)}
+	}
 
 	// Add host route
 	route := netlink.Route{
@@ -204,32 +236,32 @@ func setupNS(hostVethName string, contVethName string, netnsPath string, addr *n
 	}
 	log.Debugf("Successfully set host route to be %s/0", route.Dst.IP.String())
 
-	err = addContainerRule(netLink, true, addr, mainRouteTable)
+	err = addContainerRule(netLink, true, addrHostAddr, mainRouteTable)
 
 	if err != nil {
-		log.Errorf("Failed to add toContainer rule for %s err=%v, ", addr.String(), err)
+		log.Errorf("Failed to add toContainer rule for %s err=%v, ", addrHostAddr.String(), err)
 		return errors.Wrap(err, "setupNS network: failed to add toContainer")
 	}
 
-	log.Infof("Added toContainer rule for %s", addr.String())
+	log.Infof("Added toContainer rule for %s", addrHostAddr.String())
 
 	// add from-pod rule, only need it when it is not primary ENI
 	if deviceNumber > 0 {
 		// To be backwards compatible, we will have to keep this off-by one setting
 		tableNumber := deviceNumber + 1
 		// add rule: 1536: from <podIP> use table <table>
-		err = addContainerRule(netLink, false, addr, tableNumber)
+		err = addContainerRule(netLink, false, addrHostAddr, tableNumber)
 		if err != nil {
-			log.Errorf("Failed to add fromContainer rule for %s err: %v", addr.String(), err)
+			log.Errorf("Failed to add fromContainer rule for %s err: %v", addrHostAddr.String(), err)
 			return errors.Wrap(err, "add NS network: failed to add fromContainer rule")
 		}
-		log.Infof("Added rule priority %d from %s table %d", fromContainerRulePriority, addr.String(), tableNumber)
+		log.Infof("Added rule priority %d from %s table %d", fromContainerRulePriority, addrHostAddr.String(), tableNumber)
 	}
 	return nil
 }
 
 // setupVeth sets up veth for the pod.
-func setupVeth(hostVethName string, contVethName string, netnsPath string, addr *net.IPNet, netLink netlinkwrapper.NetLink,
+func setupVeth(hostVethName string, contVethName string, netnsPath string, v4Addr *net.IPNet, v6Addr *net.IPNet, netLink netlinkwrapper.NetLink,
 	ns nswrapper.NS, mtu int, procSys procsyswrapper.ProcSys, log logger.Logger) (netlink.Link, error) {
 	// Clean up if hostVeth exists.
 	if oldHostVeth, err := netLink.LinkByName(hostVethName); err == nil {
@@ -239,7 +271,8 @@ func setupVeth(hostVethName string, contVethName string, netnsPath string, addr 
 		log.Debugf("Cleaned up old hostVeth: %v\n", hostVethName)
 	}
 
-	createVethContext := newCreateVethPairContext(contVethName, hostVethName, addr, mtu)
+	log.Debugf("v4addr: %v; v6Addr: %v\n", v4Addr, v6Addr)
+	createVethContext := newCreateVethPairContext(contVethName, hostVethName, v4Addr, v6Addr, mtu)
 	if err := ns.WithNetNSPath(netnsPath, createVethContext.run); err != nil {
 		log.Errorf("Failed to setup veth network %v", err)
 		return nil, errors.Wrap(err, "setupVeth network: failed to setup veth network")
@@ -275,10 +308,10 @@ func setupVeth(hostVethName string, contVethName string, netnsPath string, addr 
 }
 
 // SetupPodENINetwork sets up the network ns for pods requesting its own security group
-func (os *linuxNetwork) SetupPodENINetwork(hostVethName string, contVethName string, netnsPath string, addr *net.IPNet,
-	vlanID int, eniMAC string, subnetGW string, parentIfIndex int, mtu int, log logger.Logger) error {
+func (os *linuxNetwork) SetupPodENINetwork(hostVethName string, contVethName string, netnsPath string, v4Addr *net.IPNet,
+	v6Addr *net.IPNet, vlanID int, eniMAC string, subnetGW string, parentIfIndex int, mtu int, log logger.Logger) error {
 
-	hostVeth, err := setupVeth(hostVethName, contVethName, netnsPath, addr, os.netLink, os.ns, mtu, os.procSys, log)
+	hostVeth, err := setupVeth(hostVethName, contVethName, netnsPath, v4Addr, v6Addr, os.netLink, os.ns, mtu, os.procSys, log)
 	if err != nil {
 		return errors.Wrapf(err, "SetupPodENINetwork failed to setup veth pair.")
 	}
@@ -325,6 +358,13 @@ func (os *linuxNetwork) SetupPodENINetwork(hostVethName string, contVethName str
 		if err := os.netLink.RouteReplace(&r); err != nil {
 			return errors.Wrapf(err, "SetupPodENINetwork: unable to replace route entry %s via %s", r.Dst.IP.String(), subnetGW)
 		}
+	}
+
+	var addr *net.IPNet
+	if v4Addr != nil {
+		addr = v4Addr
+	} else if v6Addr != nil {
+		addr = v6Addr
 	}
 
 	// 5. create route entry for hostveth.

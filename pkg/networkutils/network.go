@@ -128,11 +128,12 @@ var log = logger.Get()
 // NetworkAPIs defines the host level and the ENI level network related operations
 type NetworkAPIs interface {
 	// SetupNodeNetwork performs node level network configuration
-	SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool) error
+	SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool,
+		v4Enabled bool, v6Enabled bool) error
 	// SetupENINetwork performs ENI level network configuration. Not needed on the primary ENI
 	SetupENINetwork(eniIP string, mac string, deviceNumber int, subnetCIDR string) error
 	// UpdateHostIptablesRules updates the nat table iptables rules on the host
-	UpdateHostIptablesRules(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP) error
+	UpdateHostIptablesRules(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, v4Enabled bool, v6Enabled bool) error
 	UseExternalSNAT() bool
 	GetExcludeSNATCIDRs() []string
 	GetRuleList() ([]netlink.Rule, error)
@@ -153,7 +154,7 @@ type linuxNetwork struct {
 
 	netLink     netlinkwrapper.NetLink
 	ns          nswrapper.NS
-	newIptables func() (iptablesIface, error)
+	newIptables func(IPProtocol iptables.Protocol) (iptablesIface, error)
 	mainENIMark uint32
 	procSys     procsyswrapper.ProcSys
 }
@@ -193,8 +194,8 @@ func New() NetworkAPIs {
 
 		netLink: netlinkwrapper.NewNetLink(),
 		ns:      nswrapper.NewNS(),
-		newIptables: func() (iptablesIface, error) {
-			ipt, err := iptables.New()
+		newIptables: func(IPProtocol iptables.Protocol) (iptablesIface, error) {
+			ipt, err := iptables.NewWithProtocol(IPProtocol)
 			return ipt, err
 		},
 		procSys: procsyswrapper.NewProcSys(),
@@ -225,12 +226,14 @@ func findPrimaryInterfaceName(primaryMAC string) (string, error) {
 }
 
 // SetupHostNetwork performs node level network configuration
-func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool) error {
+func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool,
+	v4Enabled bool, v6Enabled bool) error {
 	log.Info("Setting up host network... ")
 
 	var err error
 	primaryIntf := "eth0"
-	if n.nodePortSupportEnabled {
+	//RP Filter setting is only needed if IPv4 mode is enabled.
+	if v4Enabled && n.nodePortSupportEnabled {
 		primaryIntf, err = findPrimaryInterfaceName(primaryMAC)
 		if err != nil {
 			return errors.Wrapf(err, "failed to SetupHostNetwork")
@@ -266,6 +269,11 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 		return errors.Wrapf(err, "setupHostNetwork: failed to set MTU to %d for %s", n.mtu, primaryIntf)
 	}
 
+	ipFamily := unix.AF_INET
+	if v6Enabled {
+		ipFamily = unix.AF_INET6
+	}
+
 	// If node port support is enabled, add a rule that will force force marked traffic out of the main ENI.  We then
 	// add iptables rules below that will mark traffic that needs this special treatment.  In particular NodePort
 	// traffic always comes in via the main ENI but response traffic would go out of the pod's assigned ENI if we
@@ -276,6 +284,7 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 	mainENIRule.Mask = int(n.mainENIMark)
 	mainENIRule.Table = mainRoutingTable
 	mainENIRule.Priority = hostRulePriority
+	mainENIRule.Family = ipFamily
 	// If this is a restart, cleanup previous rule first
 	err = n.netLink.RuleDel(mainENIRule)
 	if err != nil && !containsNoSuchRule(err) {
@@ -293,7 +302,7 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 
 	// If we want per pod ENIs, we need to give pod ENIs veth bridges a lower priority that the local table,
 	// or the rp_filter check will fail.
-	if enablePodENI {
+	if v4Enabled && enablePodENI {
 		localRule := n.netLink.NewRule()
 		localRule.Table = localRouteTable
 		localRule.Priority = localRulePriority
@@ -310,29 +319,38 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 		}
 	}
 
-	return n.updateHostIptablesRules(vpcCIDRs, primaryMAC, primaryAddr)
+	return n.updateHostIptablesRules(vpcCIDRs, primaryMAC, primaryAddr, v4Enabled, v6Enabled)
 }
 
 // UpdateHostIptablesRules updates the NAT table rules based on the VPC CIDRs configuration
-func (n *linuxNetwork) UpdateHostIptablesRules(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP) error {
-	return n.updateHostIptablesRules(vpcCIDRs, primaryMAC, primaryAddr)
+func (n *linuxNetwork) UpdateHostIptablesRules(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, v4Enabled bool,
+	v6Enabled bool) error {
+	return n.updateHostIptablesRules(vpcCIDRs, primaryMAC, primaryAddr, v4Enabled, v6Enabled)
 }
 
-func (n *linuxNetwork) updateHostIptablesRules(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP) error {
+func (n *linuxNetwork) updateHostIptablesRules(vpcCIDRs []string, primaryMAC string, primaryAddr *net.IP, v4Enabled bool,
+	v6Enabled bool) error {
 	primaryIntf, err := findPrimaryInterfaceName(primaryMAC)
 	if err != nil {
 		return errors.Wrapf(err, "failed to SetupHostNetwork")
 	}
-	ipt, err := n.newIptables()
+	ipProtocol := iptables.ProtocolIPv4
+	if v6Enabled {
+		ipProtocol = iptables.ProtocolIPv6
+	}
+	ipt, err := n.newIptables(ipProtocol)
 	if err != nil {
 		return errors.Wrap(err, "host network setup: failed to create iptables")
 	}
-	iptablesSNATRules, err := n.buildIptablesSNATRules(vpcCIDRs, primaryAddr, primaryIntf, ipt)
-	if err != nil {
-		return err
-	}
-	if err := n.updateIptablesRules(iptablesSNATRules, ipt); err != nil {
-		return err
+
+	if v4Enabled {
+		iptablesSNATRules, err := n.buildIptablesSNATRules(vpcCIDRs, primaryAddr, primaryIntf, ipt)
+		if err != nil {
+			return err
+		}
+		if err := n.updateIptablesRules(iptablesSNATRules, ipt); err != nil {
+			return err
+		}
 	}
 
 	iptablesConnmarkRules, err := n.buildIptablesConnmarkRules(vpcCIDRs, ipt)
@@ -345,7 +363,7 @@ func (n *linuxNetwork) updateHostIptablesRules(vpcCIDRs []string, primaryMAC str
 	return nil
 }
 
-func (n *linuxNetwork) buildIptablesSNATRules(vpcCIDRs []string, primaryAddr *net.IP, primaryIntf string, ipt iptablesIface) ([]iptablesRule, error) {
+func (n *linuxNetwork) buildIptablesSNATRules(vpcCIDRs []string, primaryAddr *net.IP, primaryIntf string, ipt iptablesIface ) ([]iptablesRule, error) {
 	type snatCIDR struct {
 		cidr        string
 		isExclusion bool

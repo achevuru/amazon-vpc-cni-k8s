@@ -93,6 +93,12 @@ func (imds TypedIMDS) GetLocalIPv4(ctx context.Context) (net.IP, error) {
 	return imds.getIP(ctx, "local-ipv4")
 }
 
+// GetLocalIPv6 returns the private (primary) IPv6 address of the instance.
+//TODO - Apurup - Don't really need it. We are not SNAT'ing anyways..so
+func (imds TypedIMDS) GetLocalIPv6(ctx context.Context) (net.IP, error) {
+	return imds.getIP(ctx, "local-ipv6")
+}
+
 // GetInstanceID returns the ID of this instance.
 func (imds TypedIMDS) GetInstanceID(ctx context.Context) (string, error) {
 	instanceID, err := imds.GetMetadataWithContext(ctx, "instance-id")
@@ -304,6 +310,24 @@ func (imds TypedIMDS) GetLocalIPv4Prefixes(ctx context.Context, mac string) ([]n
 	return prefixes, err
 }
 
+// GetLocalIPv4Prefixes returns the IPv4 prefixes delegated to this interface
+//TODO - Check the below path
+func (imds TypedIMDS) GetLocalIPv6Prefixes(ctx context.Context, mac string) ([]net.IPNet, error) {
+	key := fmt.Sprintf("network/interfaces/macs/%s/ipv6-prefix", mac)
+	prefixes, err := imds.getCIDRs(ctx, key)
+	if err != nil {
+		if imdsErr, ok := err.(*imdsRequestError); ok {
+			if IsNotFound(imdsErr.err) {
+				return nil, nil
+			}
+			log.Warnf("%v", err)
+			return nil, imdsErr.err
+		}
+		return nil, err
+	}
+	return prefixes, err
+}
+
 // GetIPv6s returns the IPv6 addresses associated with the interface.
 func (imds TypedIMDS) GetIPv6s(ctx context.Context, mac string) ([]net.IP, error) {
 	key := fmt.Sprintf("network/interfaces/macs/%s/ipv6s", mac)
@@ -344,7 +368,8 @@ func (imds TypedIMDS) GetVPCIPv4CIDRBlocks(ctx context.Context, mac string) ([]n
 
 // GetVPCIPv6CIDRBlocks returns the IPv6 CIDR blocks for the VPC.
 func (imds TypedIMDS) GetVPCIPv6CIDRBlocks(ctx context.Context, mac string) ([]net.IPNet, error) {
-	key := fmt.Sprintf("network/interfaces/macs/%s/vpc-ipv6-cidr-blocks", mac)
+	//TODO - Check the path - below path is from Angus's POC
+	key := fmt.Sprintf("network/interfaces/macs/%s/subnet-ipv6-cidr-blocks", mac)
 	ipnets, err := imds.getCIDRs(ctx, key)
 	if err != nil {
 		if imdsErr, ok := err.(*imdsRequestError); ok {

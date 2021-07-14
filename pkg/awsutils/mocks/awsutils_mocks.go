@@ -268,6 +268,20 @@ func (mr *MockAPIsMockRecorder) GetLocalIPv4() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLocalIPv4", reflect.TypeOf((*MockAPIs)(nil).GetLocalIPv4))
 }
 
+// GetLocalIPv6 mocks base method
+func (m *MockAPIs) GetLocalIPv6() net.IP {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLocalIPv6")
+	ret0, _ := ret[0].(net.IP)
+	return ret0
+}
+
+// GetLocalIPv6 indicates an expected call of GetLocalIPv4
+func (mr *MockAPIsMockRecorder) GetLocalIPv6() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLocalIPv6", reflect.TypeOf((*MockAPIs)(nil).GetLocalIPv4))
+}
+
 // GetPrimaryENI mocks base method
 func (m *MockAPIs) GetPrimaryENI() string {
 	m.ctrl.T.Helper()
@@ -309,6 +323,21 @@ func (m *MockAPIs) GetVPCIPv4CIDRs() ([]string, error) {
 func (mr *MockAPIsMockRecorder) GetVPCIPv4CIDRs() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVPCIPv4CIDRs", reflect.TypeOf((*MockAPIs)(nil).GetVPCIPv4CIDRs))
+}
+
+// GetVPCIPv6CIDRs mocks base method
+func (m *MockAPIs) GetVPCIPv6CIDRs() ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVPCIPv6CIDRs")
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetVPCIPv4CIDRs indicates an expected call of GetVPCIPv4CIDRs
+func (mr *MockAPIsMockRecorder) GetVPCIPv6CIDRs() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVPCIPv6CIDRs", reflect.TypeOf((*MockAPIs)(nil).GetVPCIPv4CIDRs))
 }
 
 // InitCachedPrefixDelegation mocks base method

@@ -125,7 +125,7 @@ func TestServer_AddNetwork(t *testing.T) {
 				IPv4Addr:        "192.168.1.100",
 				DeviceNumber:    int32(0),
 				UseExternalSNAT: true,
-				VPCcidrs:        []string{"10.10.0.0/16"},
+				VPCV4Cidrs:        []string{"10.10.0.0/16"},
 			},
 		},
 		{
@@ -155,7 +155,7 @@ func TestServer_AddNetwork(t *testing.T) {
 				IPv4Addr:        "192.168.1.100",
 				DeviceNumber:    int32(0),
 				UseExternalSNAT: false,
-				VPCcidrs:        []string{"10.10.0.0/16", "10.12.0.0/16", "10.13.0.0/16"},
+				VPCV4Cidrs:        []string{"10.10.0.0/16", "10.12.0.0/16", "10.13.0.0/16"},
 			},
 		},
 		{
