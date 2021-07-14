@@ -196,6 +196,9 @@ func disableIntrospection() bool {
 }
 
 func getEnvBoolWithDefault(envName string, def bool) bool {
+	if os.Getenv("envEnableIPv6") == "true" {
+		return true
+	}
 	if strValue := os.Getenv(envName); strValue != "" {
 		parsedValue, err := strconv.ParseBool(strValue)
 		if err == nil {
