@@ -80,6 +80,7 @@ type createVethPairContext struct {
 	netLink      netlinkwrapper.NetLink
 	ip           ipwrapper.IP
 	mtu          int
+	procSys procsyswrapper.ProcSys
 }
 
 func newCreateVethPairContext(contVethName string, hostVethName string, v4Addr *net.IPNet, v6Addr *net.IPNet, mtu int) *createVethPairContext {
@@ -91,6 +92,7 @@ func newCreateVethPairContext(contVethName string, hostVethName string, v4Addr *
 		netLink:      netlinkwrapper.NewNetLink(),
 		ip:           ipwrapper.NewIP(),
 		mtu:          mtu,
+		procSys: procsyswrapper.NewProcSys(),
 	}
 }
 
@@ -131,25 +133,54 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 		return errors.Wrapf(err, "setup NS network: failed to set link %q up", createVethContext.contVethName)
 	}
 
+	//Enable v6 support on Container's veth interface. We will set the same on Host side veth after we move it to host netns.
+	if err = createVethContext.procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/disable_ipv6", createVethContext.contVethName), "0"); err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on container veth interface")
+		}
+	}
+
+	//Enable v6 support on Container's lo interface. We will set the same on Host side veth after we move it to host netns.
+	if err = createVethContext.procSys.Set(fmt.Sprintf("net/ipv6/conf/lo/disable_ipv6"), "0"); err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on container veth interface")
+		}
+	}
+
+	//Enable v6 forwarding on Container's veth interface. We will set the same on Host side veth after we move it to host netns.
+	if err = createVethContext.procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/forwarding", createVethContext.contVethName), "1"); err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 forwarding container veth interface")
+		}
+	}
+
+
 	// Add a connected route to a dummy next hop (169.254.1.1)
 	// # ip route show
 	// default via 169.254.1.1 dev eth0
 	// 169.254.1.1 dev eth0
+
 	var gwIP string
 	var maskLen int
 	var addr *netlink.Addr
+	var defNet *net.IPNet
+	addr =  &netlink.Addr{IPNet: createVethContext.v6Addr}
+
 	if createVethContext.v4Addr != nil {
 		gwIP = "169.254.1.1"
 		maskLen = 32
 		addr =  &netlink.Addr{IPNet: createVethContext.v4Addr}
+		_, defNet, _ = net.ParseCIDR("0.0.0.0/0")
 	} else if createVethContext.v6Addr != nil {
-		gwIP = "fe80::1 "
+		gwIP = "fe80::1"
 		maskLen = 128
 		addr =  &netlink.Addr{IPNet: createVethContext.v6Addr}
+		_, defNet, _ = net.ParseCIDR("::/0")
 	}
 
 	gw := net.ParseIP(gwIP)
 	gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(maskLen, maskLen)}
+	log.Debugf("CVC - gw: %v ; gwNET %v\n", gw, gwNet)
 
 	if err = createVethContext.netLink.RouteReplace(&netlink.Route{
 		LinkIndex: contVeth.Attrs().Index,
@@ -159,13 +190,22 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	}
 
 	// Add a default route via dummy next hop(169.254.1.1 or fe80::1). Then all outgoing traffic will be routed by this
-	// default route via dummy next hop (169.254.1.1 or fe80::1).
+	// default route via dummy next hop (169.254.1.1 or fe80::1)
+	/*
 	if err = createVethContext.ip.AddDefaultRoute(gwNet.IP, contVeth); err != nil {
 		return errors.Wrap(err, "setup NS network: failed to add default route")
 	}
+	 */
 
-	//TODO - Make Sure disable_ipv6 is set to 0 on container veth and loopback interface(lo) in IPv6 mode.
-	//Maybe already enabled by default. But check while testing.
+	//_, v6DefaultPrefix, _ := net.ParseCIDR("::/0")
+	if err = createVethContext.netLink.RouteAdd(&netlink.Route{
+		LinkIndex: contVeth.Attrs().Index,
+		Scope:     netlink.SCOPE_UNIVERSE,
+		Dst:       defNet,
+		Gw:        gw,
+	}); err != nil {
+		return errors.Wrap(err, "setup NS network: failed to add default route")
+	}
 
 	if err = createVethContext.netLink.AddrAdd(contVeth, addr); err != nil {
 		return errors.Wrapf(err, "setup NS network: failed to add IP addr to %q", createVethContext.contVethName)
@@ -173,16 +213,13 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 
 	// add static ARP entry for default gateway
 	// we are using routed mode on the host and container need this static ARP entry to resolve its default gateway.
-	//TODO - How about v6? --> Need to set Family in neigh struct. However, if Family is left to 0 then the neighadd
 	//function will derive the Family from the IP address passed. (v4 or v6)
-
 	neigh := &netlink.Neigh{
 		LinkIndex:    contVeth.Attrs().Index,
 		State:        netlink.NUD_PERMANENT,
 		IP:           gwNet.IP,
 		HardwareAddr: hostVeth.Attrs().HardwareAddr,
 	}
-
 
 	if err = createVethContext.netLink.NeighAdd(neigh); err != nil {
 		return errors.Wrap(err, "setup NS network: failed to add static ARP")
@@ -193,6 +230,16 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	if err = createVethContext.netLink.LinkSetNsFd(hostVeth, int(hostNS.Fd())); err != nil {
 		return errors.Wrap(err, "setup NS network: failed to move veth to host netns")
 	}
+	/*
+	//err = errors.New("Dummy Error")
+	return errors.Wrapf(err,"Call Successful. v6 beg status: %v, v6 end status: %v, Total link count: %v; link0 Name: %v, Operstate: %v," +
+		"Flags: %v, NetNsID: %d;  link1 Name: %v, Operstate: %v," +
+		"Flags: %v, NetNsID: %d, link2 Name: %v, Operstate: %v," +
+		"Flags: %v, NetNsID: %d", ipv6valuebeg, ipv6valueend, len(linkList), linkList[0].Attrs().Name, linkList[0].Attrs().OperState,
+		linkList[0].Attrs().Flags, linkList[0].Attrs().NetNsID, linkList[1].Attrs().Name, linkList[1].Attrs().OperState,
+		linkList[1].Attrs().Flags, linkList[1].Attrs().NetNsID, linkList[2].Attrs().Name, linkList[2].Attrs().OperState,
+		linkList[2].Attrs().Flags, linkList[2].Attrs().NetNsID)
+	 */
 	return nil
 }
 
@@ -213,8 +260,8 @@ func setupNS(hostVethName string, contVethName string, netnsPath string, v4Addr 
 	log.Debugf("Setup host route outgoing hostVeth, LinkIndex %d", hostVeth.Attrs().Index)
 
 	var addrHostAddr *net.IPNet
-	//TODO - If/else as we either support v4 or v6 in initial launch
-	if v4Addr.IP.To4() != nil {
+	//We only support either v4 or v6 modes.
+	if v4Addr != nil && v4Addr.IP.To4() != nil {
 		addrHostAddr = &net.IPNet{
 			IP:   v4Addr.IP,
 			Mask: net.CIDRMask(32, 32)}
@@ -282,6 +329,31 @@ func setupVeth(hostVethName string, contVethName string, netnsPath string, v4Add
 	if err != nil {
 		return nil, errors.Wrapf(err, "setupVeth network: failed to find link %q", hostVethName)
 	}
+
+	//Make sure IPv6 is enabled on Host veth interface
+	if err = procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/disable_ipv6", hostVethName), "0"); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on hostVeth interface")
+		}
+	}
+
+	//Make sure IPv6 forwarding is enabled on Host veth interface
+	if err = procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/forwarding", hostVethName), "1"); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, errors.Wrapf(err, "setupVeth network: failed to enable IPv6 forwarding on hostVeth interface")
+		}
+	}
+
+	/*
+	var ipv6value string
+	if ipv6value, err = procSys.Get(fmt.Sprintf("net/ipv6/conf/%s/disable_ipv6", hostVethName)); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, errors.Wrapf(err, "setupVeth network: failed to get IPv6 status")
+		}
+	}
+	log.Debugf("2 - hostVethName: %v; disable_ipv6: %v", hostVethName, ipv6value)
+	log.Debugf("2 - hostVethName: %v; disable_ipv6: %s", hostVethName, ipv6value)
+	 */
 
 	// NB: Must be set after move to host namespace, or kernel will reset to defaults.
 	if err := procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/accept_ra", hostVethName), "0"); err != nil {
