@@ -96,7 +96,7 @@ func (imds TypedIMDS) GetLocalIPv4(ctx context.Context) (net.IP, error) {
 // GetLocalIPv6 returns the private (primary) IPv6 address of the instance.
 //TODO - Apurup - Don't really need it. We are not SNAT'ing anyways..so
 func (imds TypedIMDS) GetLocalIPv6(ctx context.Context) (net.IP, error) {
-	return imds.getIP(ctx, "local-ipv6")
+	return imds.getIP(ctx, "ipv6s")
 }
 
 // GetInstanceID returns the ID of this instance.

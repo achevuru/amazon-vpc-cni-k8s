@@ -335,17 +335,6 @@ func New(rawK8SClient client.Client, cachedK8SClient client.Client) (*IPAMContex
 		return nil, err
 	}
 
-	/* TODO - Check
-	hypervisorType, err := c.awsClient.GetInstanceHypervisorFamily()
-	if err != nil {
-		log.Error("Failed to get hypervisor type")
-		return nil, err
-	}
-	if hypervisorType != "nitro" && c.enablePrefixDelegation {
-		log.Warnf("Prefix delegation is not supported on non-nitro instance %s hence falling back to default (secondary IP) mode", c.awsClient.GetInstanceType())
-		c.enablePrefixDelegation = false
-	}
-	*/
 	c.awsClient.InitCachedPrefixDelegation(c.enablePrefixDelegation)
 	c.myNodeName = os.Getenv("MY_NODE_NAME")
 	checkpointer := datastore.NewJSONFile(dsBackingStorePath())
@@ -357,8 +346,8 @@ func New(rawK8SClient client.Client, cachedK8SClient client.Client) (*IPAMContex
 	}
 
 	mac := c.awsClient.GetPrimaryENImac()
-	// retrieve security groups
 
+	// retrieve security groups
 	err = c.awsClient.RefreshSGIDs(mac)
 	if err != nil {
 		return nil, err
@@ -374,6 +363,7 @@ func (c *IPAMContext) nodeInit() error {
 	ipamdActionsInprogress.WithLabelValues("nodeInit").Add(float64(1))
 	defer ipamdActionsInprogress.WithLabelValues("nodeInit").Sub(float64(1))
 	var err error
+	var vpcV4CIDRs []string
 	ctx := context.TODO()
 
 	log.Debugf("Start node init")
@@ -384,18 +374,19 @@ func (c *IPAMContext) nodeInit() error {
 		return err
 	}
 	c.maxENI = nodeMaxENI
+	primaryV4IP := c.awsClient.GetLocalIPv4()
 	if c.enableIPv4{
 		c.maxIPsPerENI, c.maxPrefixesPerENI, err = c.GetIPv4Limit()
 		if err != nil {
 			return err
 		}
 		log.Debugf("Max ip per ENI %d and max prefixes per ENI %d", c.maxIPsPerENI, c.maxPrefixesPerENI)
+
+		vpcV4CIDRs, err = c.awsClient.GetVPCIPv4CIDRs()
+		if err != nil {
+			return err
+		}
 	}
-	vpcV4CIDRs, err := c.awsClient.GetVPCIPv4CIDRs()
-	if err != nil {
-		return err
-	}
-	primaryV4IP := c.awsClient.GetLocalIPv4()
 
 	//TODO - Don't see a need to do anything specific for v6 CIDRs and Primary IP on host
 	/*
@@ -462,11 +453,11 @@ func (c *IPAMContext) nodeInit() error {
 		}
 	}
 
-	if err := c.dataStore.ReadBackingStore(); err != nil {
+	if err := c.dataStore.ReadBackingStore(c.enableIPv6); err != nil {
 		return err
 	}
 
-	if c.enablePrefixDelegation {
+	if c.enableIPv4 && c.enablePrefixDelegation {
 		//During upgrade or if prefix delgation knob is disabled to enabled then we
 		//might have secondary IPs attached to ENIs so doing a cleanup if not used before moving on
 		c.tryUnassignIPsFromENIs()
@@ -476,36 +467,34 @@ func (c *IPAMContext) nodeInit() error {
 		c.tryUnassignPrefixesFromENIs()
 	}
 
-	if err = c.configureIPRulesForPods(); err != nil {
-		return err
-	}
-	// Spawning updateCIDRsRulesOnChange go-routine
-	go wait.Forever(func() {
-		vpcV4CIDRs = c.updateCIDRsRulesOnChange(vpcV4CIDRs)
-	}, 30*time.Second)
-
-	eniConfigName, err := eniconfig.GetNodeSpecificENIConfigName(ctx, c.cachedK8SClient)
-	if !c.enableIPv6 && err == nil && c.useCustomNetworking && eniConfigName != "default" {
-		// Signal to VPC Resource Controller that the node is using custom networking
-		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, eniConfigName)
-		if err != nil {
-			log.Errorf("Failed to set eniConfig node label", err)
-			podENIErrInc("nodeInit")
-			return err
-		}
-	} else {
-		// Remove the custom networking label
-		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, "")
-		if err != nil {
-			log.Errorf("Failed to delete eniConfig node label", err)
-			podENIErrInc("nodeInit")
-			return err
-		}
-	}
-
-	// If we started on a node with a trunk ENI already attached, add the node label.
-	// SGPP is only supported in v4 Mode.
 	if c.enableIPv4 {
+		if err = c.configureIPRulesForPods(); err != nil {
+			return err
+		}
+		// Spawning updateCIDRsRulesOnChange go-routine
+		go wait.Forever(func() {
+			vpcV4CIDRs = c.updateCIDRsRulesOnChange(vpcV4CIDRs)
+		}, 30*time.Second)
+
+		eniConfigName, err := eniconfig.GetNodeSpecificENIConfigName(ctx, c.cachedK8SClient)
+		if !c.enableIPv6 && err == nil && c.useCustomNetworking && eniConfigName != "default" {
+			// Signal to VPC Resource Controller that the node is using custom networking
+			err := c.SetNodeLabel(ctx, vpcENIConfigLabel, eniConfigName)
+			if err != nil {
+				log.Errorf("Failed to set eniConfig node label", err)
+				podENIErrInc("nodeInit")
+				return err
+			}
+		} else {
+			// Remove the custom networking label
+			err := c.SetNodeLabel(ctx, vpcENIConfigLabel, "")
+			if err != nil {
+				log.Errorf("Failed to delete eniConfig node label", err)
+				podENIErrInc("nodeInit")
+				return err
+			}
+		}
+
 		if metadataResult.TrunkENI != "" {
 			// Signal to VPC Resource Controller that the node has a trunk already
 			err := c.SetNodeLabel(ctx, "vpc.amazonaws.com/has-trunk-attached", "true")
@@ -519,14 +508,14 @@ func (c *IPAMContext) nodeInit() error {
 			// Check if we want to ask for one
 			c.askForTrunkENIIfNeeded(ctx)
 		}
-	}
 
-	// For a new node, attach Cidrs (secondary ips/prefixes)
-	increasedPool, err := c.tryAssignCidrs()
-	if err == nil && increasedPool {
-		c.updateLastNodeIPPoolAction()
-	} else if err != nil {
-		return err
+		// For a new node, attach Cidrs (secondary ips/prefixes)
+		increasedPool, err := c.tryAssignCidrs()
+		if err == nil && increasedPool {
+			c.updateLastNodeIPPoolAction()
+		} else if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -625,7 +614,7 @@ func (c *IPAMContext) decreaseDatastorePool(interval time.Duration) {
 
 	c.lastDecreaseIPPool = now
 	c.lastNodeIPPoolAction = now
-	total, used, _ := c.dataStore.GetStats()
+	total, used, _ := c.dataStore.GetStats("4")
 	log.Debugf("Successfully decreased IP pool")
 	logPoolStats(total, used, c.maxIPsPerENI, c.enablePrefixDelegation)
 }
@@ -752,7 +741,7 @@ func (c *IPAMContext) increaseDatastorePool(ctx context.Context) {
 
 func (c *IPAMContext) updateLastNodeIPPoolAction() {
 	c.lastNodeIPPoolAction = time.Now()
-	total, used, totalPrefix := c.dataStore.GetStats()
+	total, used, totalPrefix := c.dataStore.GetStats("4")
 	if !c.enablePrefixDelegation {
 		log.Debugf("Successfully increased IP pool, total: %d, used: %d", total, used)
 	} else if c.enablePrefixDelegation {
@@ -881,31 +870,33 @@ func (c *IPAMContext) tryAssignIPs() (increasedPool bool, err error) {
 	return false, nil
 }
 
-//TODO - Apurup
-func (c *IPAMContext) checkAndAssignIPv6Prefix() error {
+func (c *IPAMContext) checkAndAssignIPv6Prefix(eniID string) error {
 	//Get Primary ENI
-	primaryENI := c.dataStore.GetPrimaryENIFromDataStore()
+	log.Debugf("In checkAndAssignIPv6Prefix for ENI: %s", eniID)
+	//Let's make an EC2 API call to get a list of IPv6 prefixes (if any) that are already attached to the
+	//current ENI. We will make this call only once during boot up/init and doing so will shield us from any
+	//IMDS out of sync issues. We only need one v6 prefix per ENI/Node.
+	ec2Prefixes, err := c.awsClient.GetIPv6PrefixesFromEC2(eniID)
+	if err != nil {
+		log.Errorf("checkAndAssignIPv6Prefix; err: %s", err)
+		return err
+	}
+	log.Debugf("In checkAndAssignIPv6Prefix:- ENI %s has %s prefixes attached", eniID, len(ec2Prefixes))
 
 	//Check if we already have a v6 Prefix attached
-	if primaryENI != nil {
-		if len(primaryENI.IPv6Cidrs) > 0 {
-			//Nothing to do
-			return nil
+	if len(ec2Prefixes) == 0 {
+		//Allocate and attach a v6 Prefix to Primary ENI
+		log.Debugf("In checkAndAssignIPv6Prefix:- calling AllocIPv6Prefixes for ENI: %s", eniID)
+		err = c.awsClient.AllocIPv6Prefixes(eniID)
+		if err != nil {
+			return err
 		}
-	} else {
-		//Allocate and attache v6 Prefix to Primary ENI
 	}
+	c.addENIv6prefixesToDataStore(ec2Prefixes, eniID)
 	return nil
 }
 
 func (c *IPAMContext) tryAssignPrefixes() (increasedPool bool, err error) {
-	//For IPv6 operating in PD mode, we only need one v6 /80 prefix per node
-	if c.enableIPv6 {
-		if err:= c.checkAndAssignIPv6Prefix(); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
 	toAllocate := c.getPrefixesNeeded()
 	// Returns an ENI which has space for more prefixes to be attached, but this
 	// ENI might not suffice the WARM_IP_TARGET/WARM_PREFIX_TARGET
@@ -967,8 +958,13 @@ func (c *IPAMContext) setupENI(eni string, eniMetadata awsutils.ENIMetadata, isT
 		c.addENIv4prefixesToDataStore(eniMetadata.IPv4Prefixes, eni)
 	}
 
-	if c.enableIPv6{
-		c.addENIv6prefixesToDataStore(eniMetadata.IPv6Prefixes, eni)
+	if c.enableIPv6 && eni == primaryENI{
+		//In v6 PD Mode, we only need primary ENI. Once we start supporting secondary IP and custom networking modes
+		//for v6, we will relax this restriction.
+		err := c.checkAndAssignIPv6Prefix(eni)
+		if err != nil {
+			return errors.Wrapf(err,"Failed to allocate IPv6 Prefixes to Primary ENI")
+		}
 	}
 
 	return nil
@@ -989,7 +985,7 @@ func (c *IPAMContext) addENIsecondaryIPsToDataStore(ec2PrivateIpAddrs []*ec2.Net
 		}
 	}
 
-	total, assigned, totalPrefix := c.dataStore.GetStats()
+	total, assigned, totalPrefix := c.dataStore.GetStats("4")
 	log.Debugf("Datastore Pool stats: total(/32): %d, assigned(/32): %d, total prefixes(/28): %d", total, assigned, totalPrefix)
 }
 
@@ -1009,14 +1005,15 @@ func (c *IPAMContext) addENIv4prefixesToDataStore(ec2PrefixAddrs []*ec2.Ipv4Pref
 		if err != nil && err.Error() != datastore.IPAlreadyInStoreError {
 			log.Warnf("Failed to increase Prefix pool, failed to add Prefix %s to data store", ec2PrefixAddr.Ipv4Prefix)
 			// continue to add next address
-			ipamdErrInc("addENIprefixesToDataStoreFailed")
+			ipamdErrInc("addENIv4prefixesToDataStoreFailed")
 		}
 	}
-	total, assigned, totalPrefix := c.dataStore.GetStats()
+	total, assigned, totalPrefix := c.dataStore.GetStats("4")
 	log.Debugf("Datastore Pool stats: total(/32): %d, assigned(/32): %d, total prefixes(/28): %d", total, assigned, totalPrefix)
 }
 
 func (c *IPAMContext) addENIv6prefixesToDataStore(ec2PrefixAddrs []*ec2.Ipv6PrefixSpecification, eni string) {
+	log.Debugf("addENIv6prefixesToDataStore for ENI: %v, count: %v", eni, len(ec2PrefixAddrs))
 	//Walk thru all prefixes
 	for _, ec2PrefixAddr := range ec2PrefixAddrs {
 		strIpv6Prefix := aws.StringValue(ec2PrefixAddr.Ipv6Prefix)
@@ -1027,15 +1024,15 @@ func (c *IPAMContext) addENIv6prefixesToDataStore(ec2PrefixAddrs []*ec2.Ipv6Pref
 			continue
 		}
 		cidr := *ipnet
-		err = c.dataStore.AddIPv4CidrToStore(eni, cidr, true)
+		err = c.dataStore.AddIPv6CidrToStore(eni, cidr, true)
 		if err != nil && err.Error() != datastore.IPAlreadyInStoreError {
 			log.Warnf("Failed to increase Prefix pool, failed to add Prefix %s to data store", ec2PrefixAddr.Ipv6Prefix)
 			// continue to add next address
-			ipamdErrInc("addENIprefixesToDataStoreFailed")
+			ipamdErrInc("addENIv6prefixesToDataStoreFailed")
 		}
 	}
-	_, _, totalPrefix := c.dataStore.GetStats() //TODO - Valid values for v6 Prefixes
-	log.Debugf("Datastore Pool stats: total prefixes(/28): %d", totalPrefix)
+	_, _, totalPrefix := c.dataStore.GetStats("6") //TODO - Valid values for v6 Prefixes
+	log.Debugf("Datastore Pool stats: total v6 prefixes(/80): %d", totalPrefix)
 }
 
 // getMaxENI returns the maximum number of ENIs to attach to this instance. This is calculated as the lesser of
@@ -1130,7 +1127,7 @@ func (c *IPAMContext) shouldRemoveExtraENIs() bool {
 		return true
 	}
 
-	total, used, _ := c.dataStore.GetStats()
+	total, used, _ := c.dataStore.GetStats("4")
 	available := total - used
 	var shouldRemoveExtra bool
 
@@ -1160,7 +1157,7 @@ func (c *IPAMContext) computeExtraPrefixesOverWarmTarget() int {
 		return over
 	}
 
-	total, used, _ := c.dataStore.GetStats()
+	total, used, _ := c.dataStore.GetStats("4")
 	available := total - used
 
 	freePrefixes := c.dataStore.GetFreePrefixes()
@@ -1301,7 +1298,7 @@ func (c *IPAMContext) nodeIPPoolReconcile(ctx context.Context, interval time.Dur
 		reconcileCnt.With(prometheus.Labels{"fn": "eniReconcileDel"}).Inc()
 	}
 	log.Debug("Successfully Reconciled ENI/IP pool")
-	total, assigned, totalPrefix := c.dataStore.GetStats()
+	total, assigned, totalPrefix := c.dataStore.GetStats("4")
 	log.Debugf("IP/Prefix Address Pool stats: total: %d, assigned: %d, total prefixes: %d", total, assigned, totalPrefix)
 	c.lastNodeIPPoolAction = curTime
 }
@@ -1640,7 +1637,7 @@ func (c *IPAMContext) datastoreTargetState() (short int, over int, enabled bool)
 		return 0, 0, false
 	}
 
-	total, assigned, totalPrefix := c.dataStore.GetStats()
+	total, assigned, totalPrefix := c.dataStore.GetStats("4")
 	available := total - assigned
 
 	// short is greater than 0 when we have fewer available IPs than the warm IP target
@@ -1922,7 +1919,7 @@ func (c *IPAMContext) isDatastorePoolTooLow() bool {
 		return short > 0
 	}
 
-	total, used, _ := c.dataStore.GetStats()
+	total, used, _ := c.dataStore.GetStats("4")
 	available := total - used
 
 	warmTarget := c.warmENITarget
@@ -2036,7 +2033,7 @@ func (c *IPAMContext) isConfigValid() bool {
 
 	if hypervisorType != "nitro" && c.enablePrefixDelegation {
 		if c.enableIPv6 {
-			log.Errorf("IPv6 is only supported in Prefix delegation Mode. Prefix Delegation is not supported on non-nitro instance %s", c.awsClient.GetInstanceType())
+			log.Errorf("Prefix Delegation is not supported on non-nitro instance %s. IPv6 is only supported in Prefix delegation Mode. ", c.awsClient.GetInstanceType())
 			return false
 		}
 		log.Warnf("Prefix delegation is not supported on non-nitro instance %s hence falling back to default (secondary IP) mode", c.awsClient.GetInstanceType())

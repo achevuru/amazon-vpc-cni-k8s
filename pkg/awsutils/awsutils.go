@@ -123,6 +123,9 @@ type APIs interface {
 	// GetIPv4PrefixesFromEC2 returns the IPv4 addresses for a given ENI
 	GetIPv4PrefixesFromEC2(eniID string) (addrList []*ec2.Ipv4PrefixSpecification, err error)
 
+	// GetIPv6PrefixesFromEC2 returns the IPv6 prefixes for a given ENI
+	GetIPv6PrefixesFromEC2(eniID string) (addrList []*ec2.Ipv6PrefixSpecification, err error)
+
 	// DescribeAllENIs calls EC2 and returns a fully populated DescribeAllENIsResult struct and an error
 	DescribeAllENIs() (DescribeAllENIsResult, error)
 
@@ -137,6 +140,9 @@ type APIs interface {
 
 	// DeallocPrefixAddresses deallocates the list of IP addresses from a ENI
 	DeallocPrefixAddresses(eniID string, ips []string) error
+
+	//AllocIPv6Prefixes allocates IPv6 prefixes to the ENI passed in
+	AllocIPv6Prefixes(eniID string) error
 
 	// GetVPCIPv4CIDRs returns VPC's IPv4 CIDRs from instance metadata
 	GetVPCIPv4CIDRs() ([]string, error)
@@ -439,11 +445,13 @@ func (cache *EC2InstanceMetadataCache) initWithEC2Metadata(ctx context.Context) 
 
 	//retrieve eth0 local-ipv6
 	if cache.v6Enabled {
-		cache.localIPv6, err = cache.imds.GetLocalIPv6(ctx)
+		/*
+		cache.localIPv6, err = cache.imds.GetIPv6s(ctx)
 		if err != nil {
 			return err
 		}
 		log.Debugf("Discovered the instance primary IPv6 address: %s", cache.localIPv6)
+		*/
 	}
 
 	// retrieve instance-id
@@ -1067,6 +1075,36 @@ func (cache *EC2InstanceMetadataCache) GetIPv4PrefixesFromEC2(eniID string) (add
 	return returnedENI.Ipv4Prefixes, nil
 }
 
+// GetIPv4PrefixesFromEC2 calls EC2 and returns a list of all addresses on the ENI
+func (cache *EC2InstanceMetadataCache) GetIPv6PrefixesFromEC2(eniID string) (addrList []*ec2.Ipv6PrefixSpecification, err error) {
+	eniIds := make([]*string, 0)
+	eniIds = append(eniIds, aws.String(eniID))
+	input := &ec2.DescribeNetworkInterfacesInput{NetworkInterfaceIds: eniIds}
+
+	start := time.Now()
+	result, err := cache.ec2SVC.DescribeNetworkInterfacesWithContext(context.Background(), input)
+	awsAPILatency.WithLabelValues("DescribeNetworkInterfaces", fmt.Sprint(err != nil), awsReqStatus(err)).Observe(msSince(start))
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == "InvalidNetworkInterfaceID.NotFound" {
+				return nil, ErrENINotFound
+			}
+		}
+		awsAPIErrInc("DescribeNetworkInterfaces", err)
+		log.Errorf("Failed to get ENI %s information from EC2 control plane %v", eniID, err)
+		return nil, errors.Wrap(err, "failed to describe network interface")
+	}
+
+	// Shouldn't happen, but let's be safe
+	if len(result.NetworkInterfaces) == 0 {
+		return nil, ErrNoNetworkInterfaces
+	}
+	returnedENI := result.NetworkInterfaces[0]
+
+	return returnedENI.Ipv6Prefixes, nil
+}
+
+
 // DescribeAllENIs calls EC2 to refresh the ENIMetadata and tags for all attached ENIs
 func (cache *EC2InstanceMetadataCache) DescribeAllENIs() (DescribeAllENIsResult, error) {
 	// Fetch all local ENI info from metadata
@@ -1402,6 +1440,33 @@ func (cache *EC2InstanceMetadataCache) AllocIPAddresses(eniID string, numIPs int
 		} else {
 			log.Infof("Allocated %d private IP addresses", len(output.AssignedPrivateIpAddresses))
 		}
+	}
+	return nil
+}
+
+func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes (eniID string) error {
+	input := &ec2.AssignIpv6AddressesInput{
+		NetworkInterfaceId: aws.String(eniID),
+		Ipv6PrefixCount:    aws.Int64(1),
+	}
+	start := time.Now()
+	output, err := cache.ec2SVC.AssignIpv6AddressesWithContext(context.Background(), input)
+	awsAPILatency.WithLabelValues("AssignIpv6AddressesWithContext", fmt.Sprint(err != nil), awsReqStatus(err)).Observe(msSince(start))
+	log.Debugf("AllocIPv6prefixes, err: %v", err)
+	if err != nil {
+		/*
+		if containsPrivateIPAddressLimitExceededError(err) {
+			log.Debug("AssignPrivateIpv6Addresses returned PrivateIpv6AddressLimitExceeded. This can happen if the data store is out of sync." +
+				"Returning without an error here since we will verify the actual state by calling EC2 to see what addresses have already assigned to this ENI.")
+			return nil
+		}
+		*/
+		log.Errorf("Failed to allocate IPv6 Prefixes on ENI %v: %v", eniID, err)
+		awsAPIErrInc("AssignPrivateIpv6Addresses", err)
+		return errors.Wrap(err, "allocate IPv6 prefix: failed to allocate an IPv6 prefix address")
+	}
+	if output != nil {
+		log.Debugf("Allocated %d private IPv6 prefixes", len(output.AssignedIpv6Prefixes))
 	}
 	return nil
 }

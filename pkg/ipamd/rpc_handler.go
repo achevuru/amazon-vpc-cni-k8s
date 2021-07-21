@@ -141,7 +141,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 			NetworkName: in.NetworkName,
 		}
 		//addr, deviceNumber, err = s.ipamContext.dataStore.AssignPodIPv4Address(ipamKey)
-		ipv4Addr, ipv6Addr, deviceNumber, err = s.ipamContext.dataStore.AssignPodIPAddress(ipamKey, s.ipamContext.enableIPv4, s.ipamContext.enableIPv6)
+		ipv4Addr, ipv6Addr, deviceNumber, err = s.ipamContext.dataStore.AssignPodIPAddress(ipamKey, s.ipamContext.enableIPv4, s.ipamContext.enableIPv6, in.Netns)
 
 	}
 	pbVPCV4cidrs, err := s.ipamContext.awsClient.GetVPCIPv4CIDRs()
@@ -186,6 +186,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 	return &resp, nil
 }
 
+
 func (s *server) validateVersion(clientVersion string) error {
 	if s.version != clientVersion {
 		return status.Errorf(codes.FailedPrecondition, "wrong client version %q (!= %q)", clientVersion, s.version)
@@ -209,7 +210,7 @@ func (s *server) DelNetwork(ctx context.Context, in *rpc.DelNetworkRequest) (*rp
 		IfName:      in.IfName,
 		NetworkName: in.NetworkName,
 	}
-	eni, ip, deviceNumber, err := s.ipamContext.dataStore.UnassignPodIPv4Address(ipamKey)
+	eni, ip, deviceNumber, err := s.ipamContext.dataStore.UnassignPodIPAddress(ipamKey)
 	cidr := net.IPNet{IP: net.ParseIP(ip), Mask: net.IPv4Mask(255, 255, 255, 255)}
 	cidrStr := cidr.String()
 	if eni != nil {
