@@ -33,11 +33,11 @@ import (
 
 	"github.com/aws/amazon-vpc-cni-k8s/cmd/routed-eni-cni-plugin/driver"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/grpcwrapper"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd/datastore"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/networkutils"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/rpcwrapper"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/typeswrapper"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd/datastore"
 	pb "github.com/aws/amazon-vpc-cni-k8s/rpc"
 )
 

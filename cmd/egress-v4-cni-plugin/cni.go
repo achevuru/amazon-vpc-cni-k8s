@@ -51,14 +51,14 @@ type NetConf struct {
 	IfName string `json:"ifName"`
 
 	//MTU for Egress v4 interface
-	MTU    int    `json:"mtu"`
+	MTU int `json:"mtu"`
 
 	Enabled string `json:"enabled"`
 
 	// IP to use as SNAT target
-    NodeIP  net.IP `json:"nodeIP"`
+	NodeIP net.IP `json:"nodeIP"`
 
-	PluginLogFile string `json:"pluginLogFile"`
+	PluginLogFile  string `json:"pluginLogFile"`
 	PluginLogLevel string `json:"pluginLogLevel"`
 }
 
@@ -70,7 +70,7 @@ func loadConf(bytes []byte) (*NetConf, logger.Logger, error) {
 	}
 
 	logConfig := logger.Configuration{
-		LogLevel:  conf.PluginLogLevel,
+		LogLevel:    conf.PluginLogLevel,
 		LogLocation: conf.PluginLogFile,
 	}
 	log := logger.New(&logConfig)
@@ -254,34 +254,34 @@ func getNodePrimaryV4Address() (err error) {
 
 func cmdCheck(args *skel.CmdArgs) error {
 	/*
-	netConf, log, err := loadConf(args.StdinData)
-	if err != nil {
-		return fmt.Errorf("failed to parse config: %v", err)
-	}
-	if netConf.PrevResult == nil {
-		log.Debugf("PrevResult is nil, re")
-		return fmt.Errorf("must be called as a chained plugin")
-	}
+		netConf, log, err := loadConf(args.StdinData)
+		if err != nil {
+			return fmt.Errorf("failed to parse config: %v", err)
+		}
+		if netConf.PrevResult == nil {
+			log.Debugf("PrevResult is nil, re")
+			return fmt.Errorf("must be called as a chained plugin")
+		}
 
-	prevResult, err := current.GetResult(netConf.PrevResult)
-	if err != nil {
-		return err
-	}
+		prevResult, err := current.GetResult(netConf.PrevResult)
+		if err != nil {
+			return err
+		}
 
-	chain := utils.MustFormatChainNameWithPrefix(netConf.Name, args.ContainerID, "E4-")
-	comment := utils.FormatComment(netConf.Name, args.ContainerID)
+		chain := utils.MustFormatChainNameWithPrefix(netConf.Name, args.ContainerID, "E4-")
+		comment := utils.FormatComment(netConf.Name, args.ContainerID)
 
-	if netConf.SnatIP != nil {
-		for _, ipc := range prevResult.IPs {
-			if ipc.Version == "4" {
-				if err := snat.Snat4Check(netConf.SnatIP, ipc.Address.IP, chain, comment); err != nil {
-					return err
+		if netConf.SnatIP != nil {
+			for _, ipc := range prevResult.IPs {
+				if ipc.Version == "4" {
+					if err := snat.Snat4Check(netConf.SnatIP, ipc.Address.IP, chain, comment); err != nil {
+						return err
+					}
 				}
 			}
 		}
-	}
 
-    */
+	*/
 
 	return nil
 }
@@ -298,7 +298,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	log.Debugf("doing ADD: conf=%v; enabled=%s", netConf, netConf.Enabled)
 
 	//We only need this plugin to kick in if v6 is enabled
-	if netConf.Enabled == "false"{
+	if netConf.Enabled == "false" {
 		return types.PrintResult(result, netConf.CNIVersion)
 	}
 
@@ -347,7 +347,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	//log.Printf("Set up host iface %q. Result: %v", hostInterface.Name, tmpResult)
-    log.Debugf("Node IP: %s", netConf.NodeIP)
+	log.Debugf("Node IP: %s", netConf.NodeIP)
 
 	if netConf.NodeIP != nil {
 		for _, ipc := range tmpResult.IPs {
@@ -379,7 +379,7 @@ func cmdDel(args *skel.CmdArgs) error {
 	}
 
 	//We only need this plugin to kick in if v6 is enabled
-	if netConf.Enabled == "false"{
+	if netConf.Enabled == "false" {
 		return nil
 	}
 
@@ -423,7 +423,6 @@ func cmdDel(args *skel.CmdArgs) error {
 			for _, addr := range addrs {
 				ipnets = append(ipnets, addr.IPNet)
 			}
-
 
 			if err != nil && err == ip.ErrLinkNotFound {
 				log.Debugf("DEL: Link Not Found, returning", err)

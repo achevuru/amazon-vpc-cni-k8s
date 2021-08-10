@@ -80,7 +80,7 @@ type createVethPairContext struct {
 	netLink      netlinkwrapper.NetLink
 	ip           ipwrapper.IP
 	mtu          int
-	procSys procsyswrapper.ProcSys
+	procSys      procsyswrapper.ProcSys
 }
 
 func newCreateVethPairContext(contVethName string, hostVethName string, v4Addr *net.IPNet, v6Addr *net.IPNet, mtu int) *createVethPairContext {
@@ -92,7 +92,7 @@ func newCreateVethPairContext(contVethName string, hostVethName string, v4Addr *
 		netLink:      netlinkwrapper.NewNetLink(),
 		ip:           ipwrapper.NewIP(),
 		mtu:          mtu,
-		procSys: procsyswrapper.NewProcSys(),
+		procSys:      procsyswrapper.NewProcSys(),
 	}
 }
 
@@ -165,17 +165,17 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	var maskLen int
 	var addr *netlink.Addr
 	var defNet *net.IPNet
-	addr =  &netlink.Addr{IPNet: createVethContext.v6Addr}
+	addr = &netlink.Addr{IPNet: createVethContext.v6Addr}
 
 	if createVethContext.v4Addr != nil {
 		gwIP = "169.254.1.1"
 		maskLen = 32
-		addr =  &netlink.Addr{IPNet: createVethContext.v4Addr}
+		addr = &netlink.Addr{IPNet: createVethContext.v4Addr}
 		_, defNet, _ = net.ParseCIDR("0.0.0.0/0")
 	} else if createVethContext.v6Addr != nil {
 		gwIP = "fe80::1"
 		maskLen = 128
-		addr =  &netlink.Addr{IPNet: createVethContext.v6Addr}
+		addr = &netlink.Addr{IPNet: createVethContext.v6Addr}
 		_, defNet, _ = net.ParseCIDR("::/0")
 	}
 
@@ -193,10 +193,10 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	// Add a default route via dummy next hop(169.254.1.1 or fe80::1). Then all outgoing traffic will be routed by this
 	// default route via dummy next hop (169.254.1.1 or fe80::1)
 	/*
-	if err = createVethContext.ip.AddDefaultRoute(gwNet.IP, contVeth); err != nil {
-		return errors.Wrap(err, "setup NS network: failed to add default route")
-	}
-	 */
+		if err = createVethContext.ip.AddDefaultRoute(gwNet.IP, contVeth); err != nil {
+			return errors.Wrap(err, "setup NS network: failed to add default route")
+		}
+	*/
 
 	//_, v6DefaultPrefix, _ := net.ParseCIDR("::/0")
 	if err = createVethContext.netLink.RouteAdd(&netlink.Route{
