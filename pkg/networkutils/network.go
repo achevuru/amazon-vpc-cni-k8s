@@ -371,7 +371,7 @@ func (n *linuxNetwork) updateHostIptablesRules(vpcCIDRs []string, primaryMAC str
 	return nil
 }
 
-func (n *linuxNetwork) buildIptablesSNATRules(vpcCIDRs []string, primaryAddr *net.IP, primaryIntf string, ipt iptablesIface ) ([]iptablesRule, error) {
+func (n *linuxNetwork) buildIptablesSNATRules(vpcCIDRs []string, primaryAddr *net.IP, primaryIntf string, ipt iptablesIface) ([]iptablesRule, error) {
 	type snatCIDR struct {
 		cidr        string
 		isExclusion bool

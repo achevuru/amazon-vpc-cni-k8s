@@ -202,26 +202,26 @@ type APIs interface {
 // EC2InstanceMetadataCache caches instance metadata
 type EC2InstanceMetadataCache struct {
 	// metadata info
-	securityGroups      StringSet
-	subnetID            string
-	localIPv4           net.IP
-	localIPv6           net.IP
-	v4Enabled           bool
-	v6Enabled           bool
-	instanceID          string
-	instanceType        string
-	primaryENI          string
-	primaryENImac       string
-	availabilityZone    string
-	region              string
+	securityGroups   StringSet
+	subnetID         string
+	localIPv4        net.IP
+	localIPv6        net.IP
+	v4Enabled        bool
+	v6Enabled        bool
+	instanceID       string
+	instanceType     string
+	primaryENI       string
+	primaryENImac    string
+	availabilityZone string
+	region           string
 
 	unmanagedENIs       StringSet
 	useCustomNetworking bool
 	cniunmanagedENIs    StringSet
 	usePrefixDelegation bool
 
-	clusterName         string
-	additionalENITags   map[string]string
+	clusterName       string
+	additionalENITags map[string]string
 
 	imds   TypedIMDS
 	ec2SVC ec2wrapper.EC2
@@ -439,11 +439,11 @@ func (cache *EC2InstanceMetadataCache) initWithEC2Metadata(ctx context.Context) 
 	//retrieve eth0 local-ipv6
 	if cache.v6Enabled {
 		/*
-		cache.localIPv6, err = cache.imds.GetIPv6s(ctx)
-		if err != nil {
-			return err
-		}
-		log.Debugf("Discovered the instance primary IPv6 address: %s", cache.localIPv6)
+			cache.localIPv6, err = cache.imds.GetIPv6s(ctx)
+			if err != nil {
+				return err
+			}
+			log.Debugf("Discovered the instance primary IPv6 address: %s", cache.localIPv6)
 		*/
 	}
 
@@ -493,7 +493,7 @@ func (cache *EC2InstanceMetadataCache) initWithEC2Metadata(ctx context.Context) 
 
 // RefreshSGIDs retrieves security groups
 func (cache *EC2InstanceMetadataCache) RefreshSGIDs(mac string) error {
-	if cache.v6Enabled{
+	if cache.v6Enabled {
 		//Skip for now
 		return nil
 	}
@@ -1097,7 +1097,6 @@ func (cache *EC2InstanceMetadataCache) GetIPv6PrefixesFromEC2(eniID string) (add
 	return returnedENI.Ipv6Prefixes, nil
 }
 
-
 // DescribeAllENIs calls EC2 to refresh the ENIMetadata and tags for all attached ENIs
 func (cache *EC2InstanceMetadataCache) DescribeAllENIs() (DescribeAllENIsResult, error) {
 	// Fetch all local ENI info from metadata
@@ -1437,7 +1436,7 @@ func (cache *EC2InstanceMetadataCache) AllocIPAddresses(eniID string, numIPs int
 	return nil
 }
 
-func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes (eniID string) error {
+func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes(eniID string) error {
 	//We only need to allocate one IPv6 prefix per ENI.
 	input := &ec2.AssignIpv6AddressesInput{
 		NetworkInterfaceId: aws.String(eniID),

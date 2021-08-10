@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
-	"github.com/coreos/go-iptables/iptables"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"

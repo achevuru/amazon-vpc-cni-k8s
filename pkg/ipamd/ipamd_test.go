@@ -189,22 +189,22 @@ func TestNodeInitwithPDenabled(t *testing.T) {
 	}
 
 	mockContext := &IPAMContext{
-		awsClient:                  m.awsutils,
-		rawK8SClient:               m.rawK8SClient,
-		cachedK8SClient:            m.cachedK8SClient,
-		maxIPsPerENI:               224,
-		maxPrefixesPerENI:          14,
-		maxENI:                     4,
-		warmENITarget:              1,
-		warmIPTarget:               3,
-		primaryIP:                  make(map[string]string),
-		terminating:                int32(0),
-		networkClient:              m.network,
-		dataStore:                  datastore.NewDataStore(log, datastore.NewTestCheckpoint(fakeCheckpoint), true),
-		myNodeName:                 myNodeName,
-		enablePrefixDelegation:     true,
-		enableIPv4:                 true,
-		enableIPv6:                 false,
+		awsClient:              m.awsutils,
+		rawK8SClient:           m.rawK8SClient,
+		cachedK8SClient:        m.cachedK8SClient,
+		maxIPsPerENI:           224,
+		maxPrefixesPerENI:      14,
+		maxENI:                 4,
+		warmENITarget:          1,
+		warmIPTarget:           3,
+		primaryIP:              make(map[string]string),
+		terminating:            int32(0),
+		networkClient:          m.network,
+		dataStore:              datastore.NewDataStore(log, datastore.NewTestCheckpoint(fakeCheckpoint), true),
+		myNodeName:             myNodeName,
+		enablePrefixDelegation: true,
+		enableIPv4:             true,
+		enableIPv6:             false,
 	}
 	mockContext.dataStore.CheckpointMigrationPhase = 2
 
@@ -472,18 +472,18 @@ func testIncreasePrefixPool(t *testing.T, useENIConfig bool) {
 	ctx := context.Background()
 
 	mockContext := &IPAMContext{
-		awsClient:                  m.awsutils,
-		rawK8SClient:               m.rawK8SClient,
-		cachedK8SClient:            m.cachedK8SClient,
-		maxIPsPerENI:               256,
-		maxPrefixesPerENI:          16,
-		maxENI:                     4,
-		warmENITarget:              1,
-		warmPrefixTarget:           1,
-		networkClient:              m.network,
-		useCustomNetworking:        UseCustomNetworkCfg(),
-		primaryIP:                  make(map[string]string),
-		terminating:                int32(0),
+		awsClient:              m.awsutils,
+		rawK8SClient:           m.rawK8SClient,
+		cachedK8SClient:        m.cachedK8SClient,
+		maxIPsPerENI:           256,
+		maxPrefixesPerENI:      16,
+		maxENI:                 4,
+		warmENITarget:          1,
+		warmPrefixTarget:       1,
+		networkClient:          m.network,
+		useCustomNetworking:    UseCustomNetworkCfg(),
+		primaryIP:              make(map[string]string),
+		terminating:            int32(0),
 		enablePrefixDelegation: true,
 	}
 
@@ -753,10 +753,10 @@ func TestNodePrefixPoolReconcile(t *testing.T) {
 	ctx := context.Background()
 
 	mockContext := &IPAMContext{
-		awsClient:                  m.awsutils,
-		networkClient:              m.network,
-		primaryIP:                  make(map[string]string),
-		terminating:                int32(0),
+		awsClient:              m.awsutils,
+		networkClient:          m.network,
+		primaryIP:              make(map[string]string),
+		terminating:            int32(0),
 		enablePrefixDelegation: true,
 	}
 
@@ -935,10 +935,10 @@ func TestGetWarmIPTargetStatewithPDenabled(t *testing.T) {
 	defer m.ctrl.Finish()
 
 	mockContext := &IPAMContext{
-		awsClient:                  m.awsutils,
-		networkClient:              m.network,
-		primaryIP:                  make(map[string]string),
-		terminating:                int32(0),
+		awsClient:              m.awsutils,
+		networkClient:          m.network,
+		primaryIP:              make(map[string]string),
+		terminating:            int32(0),
 		enablePrefixDelegation: true,
 	}
 
@@ -1004,14 +1004,14 @@ func TestIPAMContext_nodeIPPoolTooLow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &IPAMContext{
-				awsClient:                  m.awsutils,
-				dataStore:                  tt.fields.datastore,
-				useCustomNetworking:        false,
-				networkClient:              m.network,
-				maxIPsPerENI:               tt.fields.maxIPsPerENI,
-				maxENI:                     -1,
-				warmENITarget:              tt.fields.warmENITarget,
-				warmIPTarget:               tt.fields.warmIPTarget,
+				awsClient:              m.awsutils,
+				dataStore:              tt.fields.datastore,
+				useCustomNetworking:    false,
+				networkClient:          m.network,
+				maxIPsPerENI:           tt.fields.maxIPsPerENI,
+				maxENI:                 -1,
+				warmENITarget:          tt.fields.warmENITarget,
+				warmIPTarget:           tt.fields.warmIPTarget,
 				enablePrefixDelegation: false,
 			}
 			if got := c.isDatastorePoolTooLow(); got != tt.want {
@@ -1048,14 +1048,14 @@ func TestIPAMContext_nodePrefixPoolTooLow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &IPAMContext{
-				awsClient:                  m.awsutils,
-				dataStore:                  tt.fields.datastore,
-				useCustomNetworking:        false,
-				networkClient:              m.network,
-				maxPrefixesPerENI:          tt.fields.maxPrefixesPerENI,
-				maxIPsPerENI:               tt.fields.maxIPsPerENI,
-				maxENI:                     -1,
-				warmPrefixTarget:           tt.fields.warmPrefixTarget,
+				awsClient:              m.awsutils,
+				dataStore:              tt.fields.datastore,
+				useCustomNetworking:    false,
+				networkClient:          m.network,
+				maxPrefixesPerENI:      tt.fields.maxPrefixesPerENI,
+				maxIPsPerENI:           tt.fields.maxIPsPerENI,
+				maxENI:                 -1,
+				warmPrefixTarget:       tt.fields.warmPrefixTarget,
 				enablePrefixDelegation: true,
 			}
 			if got := c.isDatastorePoolTooLow(); got != tt.want {
@@ -1317,10 +1317,10 @@ func TestNodePrefixPoolReconcileBadIMDSData(t *testing.T) {
 	ctx := context.Background()
 
 	mockContext := &IPAMContext{
-		awsClient:                  m.awsutils,
-		networkClient:              m.network,
-		primaryIP:                  make(map[string]string),
-		terminating:                int32(0),
+		awsClient:              m.awsutils,
+		networkClient:          m.network,
+		primaryIP:              make(map[string]string),
+		terminating:            int32(0),
 		enablePrefixDelegation: true,
 	}
 
@@ -1663,48 +1663,48 @@ func TestIsConfigValid(t *testing.T) {
 		{
 			name: "v4 enabled in non-PD mode and v6 disabled",
 			fields: fields{
-               ipV4Enabled: true,
-               ipV6Enabled: false,
-               prefixDelegationEnabled: false,
-               isNitroInstance: true,
+				ipV4Enabled:             true,
+				ipV6Enabled:             false,
+				prefixDelegationEnabled: false,
+				isNitroInstance:         true,
 			},
-		    want: true,
-	    },
+			want: true,
+		},
 		{
 			name: "v4 enabled in PD mode and v6 disabled",
 			fields: fields{
-				ipV4Enabled: true,
-				ipV6Enabled: false,
+				ipV4Enabled:             true,
+				ipV6Enabled:             false,
 				prefixDelegationEnabled: true,
-				isNitroInstance: true,
+				isNitroInstance:         true,
 			},
 			want: true,
 		},
 		{
 			name: "v4 disabled and v6 enabled in PD mode",
 			fields: fields{
-				ipV4Enabled: false,
-				ipV6Enabled: true,
+				ipV4Enabled:             false,
+				ipV6Enabled:             true,
 				prefixDelegationEnabled: true,
-				isNitroInstance: true,
+				isNitroInstance:         true,
 			},
 			want: true,
 		},
 		{
 			name: "v4 disabled and v6 enabled in non-PD mode",
 			fields: fields{
-				ipV4Enabled: false,
-				ipV6Enabled: true,
+				ipV4Enabled:             false,
+				ipV6Enabled:             true,
 				prefixDelegationEnabled: false,
-				isNitroInstance: true,
+				isNitroInstance:         true,
 			},
 			want: false,
 		},
 		{
 			name: "both v4 and v6 enabled",
 			fields: fields{
-				ipV4Enabled: true,
-				ipV6Enabled: true,
+				ipV4Enabled:     true,
+				ipV6Enabled:     true,
 				isNitroInstance: true,
 			},
 			want: false,
@@ -1712,36 +1712,36 @@ func TestIsConfigValid(t *testing.T) {
 		{
 			name: "v4 disabled and v6 enabled in PD mode on Non-Nitro instance",
 			fields: fields{
-				ipV4Enabled: false,
-				ipV6Enabled: true,
+				ipV4Enabled:             false,
+				ipV6Enabled:             true,
 				prefixDelegationEnabled: true,
-				isNitroInstance: false,
+				isNitroInstance:         false,
 			},
 			want: false,
 		},
 		{
 			name: "ppsg enabled in v6 mode",
 			fields: fields{
-				ipV4Enabled: false,
-				ipV6Enabled: true,
+				ipV4Enabled:             false,
+				ipV6Enabled:             true,
 				prefixDelegationEnabled: true,
-				podENIEnabled: true,
-				isNitroInstance: true,
+				podENIEnabled:           true,
+				isNitroInstance:         true,
 			},
 			want: false,
 		},
 		{
 			name: "ppsg enabled in v4 mode",
 			fields: fields{
-				ipV4Enabled: true,
-				ipV6Enabled: false,
+				ipV4Enabled:             true,
+				ipV6Enabled:             false,
 				prefixDelegationEnabled: true,
-				podENIEnabled: true,
-				isNitroInstance: true,
+				podENIEnabled:           true,
+				isNitroInstance:         true,
 			},
 			want: true,
 		},
-    }
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1757,14 +1757,14 @@ func TestIsConfigValid(t *testing.T) {
 			ds := datastore.NewDataStore(log, datastore.NullCheckpoint{}, tt.fields.prefixDelegationEnabled)
 
 			mockContext := &IPAMContext{
-				awsClient:     m.awsutils,
-				networkClient: m.network,
-				enableIPv4:    tt.fields.ipV4Enabled,
-				enableIPv6:    tt.fields.ipV6Enabled,
+				awsClient:              m.awsutils,
+				networkClient:          m.network,
+				enableIPv4:             tt.fields.ipV4Enabled,
+				enableIPv6:             tt.fields.ipV6Enabled,
 				enablePrefixDelegation: tt.fields.prefixDelegationEnabled,
-				enablePodENI: tt.fields.podENIEnabled,
-				useCustomNetworking: tt.fields.customNetworkingEnabled,
-				dataStore:     ds,
+				enablePodENI:           tt.fields.podENIEnabled,
+				useCustomNetworking:    tt.fields.customNetworkingEnabled,
+				dataStore:              ds,
 			}
 
 			resp := mockContext.isConfigValid()

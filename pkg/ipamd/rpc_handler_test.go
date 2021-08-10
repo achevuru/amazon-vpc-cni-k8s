@@ -137,7 +137,7 @@ func TestServer_AddNetwork(t *testing.T) {
 				IPv4Addr:        "192.168.1.100",
 				DeviceNumber:    int32(0),
 				UseExternalSNAT: true,
-				VPCV4Cidrs:        []string{"10.10.0.0/16"},
+				VPCV4Cidrs:      []string{"10.10.0.0/16"},
 			},
 		},
 		{
@@ -169,19 +169,19 @@ func TestServer_AddNetwork(t *testing.T) {
 				IPv4Addr:        "192.168.1.100",
 				DeviceNumber:    int32(0),
 				UseExternalSNAT: false,
-				VPCV4Cidrs:        []string{"10.10.0.0/16", "10.12.0.0/16", "10.13.0.0/16"},
+				VPCV4Cidrs:      []string{"10.10.0.0/16", "10.12.0.0/16", "10.13.0.0/16"},
 			},
 		},
 		{
 			name: "failed allocating IPv4Address ",
 			fields: fields{
 				ipV4AddressByENIID: map[string][]string{},
-				ipV4Enabled: true,
-				ipV6Enabled: false,
+				ipV4Enabled:        true,
+				ipV6Enabled:        false,
 			},
 			want: &pb.AddNetworkReply{
-				Success: false,
-				DeviceNumber:    int32(-1),
+				Success:      false,
+				DeviceNumber: int32(-1),
 			},
 		},
 		{
@@ -195,28 +195,28 @@ func TestServer_AddNetwork(t *testing.T) {
 						cidrs: []string{"2001:db8::/56"},
 					},
 				},
-				ipV4Enabled: false,
-				ipV6Enabled: true,
+				ipV4Enabled:             false,
+				ipV6Enabled:             true,
 				prefixDelegationEnabled: true,
 			},
 			want: &pb.AddNetworkReply{
-				Success:         true,
-				IPv6Addr:        "2001:db8::",
-				DeviceNumber:    int32(0),
-				VPCV6Cidrs:      []string{"2001:db8::/56"},
+				Success:      true,
+				IPv6Addr:     "2001:db8::",
+				DeviceNumber: int32(0),
+				VPCV6Cidrs:   []string{"2001:db8::/56"},
 			},
 		},
 		{
 			name: "failed allocating IPv6Address - No IP addresses available",
 			fields: fields{
-				ipV6PrefixByENIID: map[string][]string{},
-				ipV4Enabled: true,
-				ipV6Enabled: false,
+				ipV6PrefixByENIID:       map[string][]string{},
+				ipV4Enabled:             true,
+				ipV6Enabled:             false,
 				prefixDelegationEnabled: true,
 			},
 			want: &pb.AddNetworkReply{
-				Success: false,
-				DeviceNumber:    int32(-1),
+				Success:      false,
+				DeviceNumber: int32(-1),
 			},
 		},
 		{
@@ -225,14 +225,14 @@ func TestServer_AddNetwork(t *testing.T) {
 				ipV6PrefixByENIID: map[string][]string{
 					"eni-1": {"2001:db8::/64"},
 				},
-				ipV4Enabled: false,
-				ipV6Enabled: true,
+				ipV4Enabled:             false,
+				ipV6Enabled:             true,
 				prefixDelegationEnabled: false,
 			},
 			want: &pb.AddNetworkReply{
-				Success:         false,
-				IPv6Addr:        "",
-				DeviceNumber:    int32(-1),
+				Success:      false,
+				IPv6Addr:     "",
+				DeviceNumber: int32(-1),
 			},
 		},
 	}
@@ -270,16 +270,16 @@ func TestServer_AddNetwork(t *testing.T) {
 			}
 
 			mockContext := &IPAMContext{
-				awsClient:     m.awsutils,
-				maxIPsPerENI:  14,
-				maxENI:        4,
-				warmENITarget: 1,
-				warmIPTarget:  3,
-				networkClient: m.network,
-				enableIPv4:    tt.fields.ipV4Enabled,
-				enableIPv6:    tt.fields.ipV6Enabled,
+				awsClient:              m.awsutils,
+				maxIPsPerENI:           14,
+				maxENI:                 4,
+				warmENITarget:          1,
+				warmIPTarget:           3,
+				networkClient:          m.network,
+				enableIPv4:             tt.fields.ipV4Enabled,
+				enableIPv6:             tt.fields.ipV6Enabled,
 				enablePrefixDelegation: tt.fields.prefixDelegationEnabled,
-				dataStore:     ds,
+				dataStore:              ds,
 			}
 
 			s := &server{

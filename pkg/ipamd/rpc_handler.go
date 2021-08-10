@@ -130,7 +130,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 	}
 
 	if s.ipamContext.enableIPv4 && ipv4Addr == "" ||
-		s.ipamContext.enableIPv6 && ipv6Addr == ""{
+		s.ipamContext.enableIPv6 && ipv6Addr == "" {
 		if in.ContainerID == "" || in.IfName == "" || in.NetworkName == "" {
 			log.Errorf("Unable to generate IPAMKey from %+v", in)
 			return &failureResponse, nil
@@ -146,7 +146,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 
 	var pbVPCV4cidrs, pbVPCV6cidrs []string
 	var useExternalSNAT bool
-	if s.ipamContext.enableIPv4 && ipv4Addr != ""{
+	if s.ipamContext.enableIPv4 && ipv4Addr != "" {
 		pbVPCV4cidrs, err = s.ipamContext.awsClient.GetVPCIPv4CIDRs()
 		if err != nil {
 			return nil, err
@@ -188,7 +188,6 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 	log.Infof("Send AddNetworkReply: IPv4Addr %s, IPv6Addr: %s, DeviceNumber: %d, err: %v", ipv4Addr, ipv6Addr, deviceNumber, err)
 	return &resp, nil
 }
-
 
 func (s *server) validateVersion(clientVersion string) error {
 	if s.version != clientVersion {

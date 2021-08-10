@@ -225,11 +225,11 @@ type IPAMContext struct {
 	lastDecreaseIPPool   time.Time
 	// reconcileCooldownCache keeps timestamps of the last time an IP address was unassigned from an ENI,
 	// so that we don't reconcile and add it back too quickly if IMDS lags behind reality.
-	reconcileCooldownCache     ReconcileCooldownCache
-	terminating                int32 // Flag to warn that the pod is about to shut down.
-	disableENIProvisioning     bool
-	enablePodENI               bool
-	myNodeName                 string
+	reconcileCooldownCache ReconcileCooldownCache
+	terminating            int32 // Flag to warn that the pod is about to shut down.
+	disableENIProvisioning bool
+	enablePodENI           bool
+	myNodeName             string
 	enablePrefixDelegation bool
 }
 
@@ -331,7 +331,7 @@ func New(rawK8SClient client.Client, cachedK8SClient client.Client) (*IPAMContex
 	c.disableENIProvisioning = disablingENIProvisioning()
 	c.enablePodENI = enablePodENI()
 
-	if !c.isConfigValid(){
+	if !c.isConfigValid() {
 		return nil, err
 	}
 
@@ -376,8 +376,8 @@ func (c *IPAMContext) nodeInit() error {
 	c.maxENI = nodeMaxENI
 	primaryV4IP := c.awsClient.GetLocalIPv4()
 	err = c.initENIAndIPLimits()
-	if c.enableIPv4{
-	    //Subnets currently will have both v4 and v6 CIDRs. Once EC2 launches v6 only Subnets, that will no longer
+	if c.enableIPv4 {
+		//Subnets currently will have both v4 and v6 CIDRs. Once EC2 launches v6 only Subnets, that will no longer
 		//be true and so it is safe (and only required) to get the v4 CIDR info only when IPv4 mode is enabled.
 		vpcV4CIDRs, err = c.awsClient.GetVPCIPv4CIDRs()
 		if err != nil {
@@ -933,13 +933,13 @@ func (c *IPAMContext) setupENI(eni string, eniMetadata awsutils.ENIMetadata, isT
 	// Store the primary IP of the ENI
 	c.primaryIP[eni] = eniMetadata.PrimaryIPv4Address()
 
-	if c.enableIPv6 && eni == primaryENI{
+	if c.enableIPv6 && eni == primaryENI {
 		//In v6 PD Mode, we only need and manage primary ENI. Once we start supporting secondary IP and custom networking modes
 		//for v6, we will relax this restriction. We filter out all the ENIs except Primary ENI in v6 mode, but included
 		//the primary ENI check as a safety net.
 		err := c.checkAndAssignIPv6Prefix(eni)
 		if err != nil {
-			return errors.Wrapf(err,"Failed to allocate IPv6 Prefixes to Primary ENI")
+			return errors.Wrapf(err, "Failed to allocate IPv6 Prefixes to Primary ENI")
 		}
 	} else {
 		// For secondary ENIs, set up the network
@@ -1606,7 +1606,7 @@ func (c *IPAMContext) filterUnmanagedENIs(enis []awsutils.ENIMetadata) []awsutil
 		//Filter out any Unmanaged ENIs. VPC CNI will only work with Primary ENI in IPv6 Prefix Delegation mode until
 		//we open up IPv6 support in Secondary IP and Custom networking modes. Filtering out the ENIs here will
 		//help us avoid myriad of if/else loops elsewhere in the code.
-		if c.enableIPv6 && c.enablePrefixDelegation && !c.awsClient.IsPrimaryENI(eni.ENIID){
+		if c.enableIPv6 && c.enablePrefixDelegation && !c.awsClient.IsPrimaryENI(eni.ENIID) {
 			log.Debugf("Skipping ENI %s: IPv6 Mode is enabled and we only manage Primary ENI in v6 PD mode",
 				eni.ENIID)
 			numFiltered++
@@ -2016,7 +2016,7 @@ func (c *IPAMContext) getPrefixesNeeded() int {
 }
 
 func (c *IPAMContext) initENIAndIPLimits() (err error) {
-	if c.enableIPv4{
+	if c.enableIPv4 {
 		c.maxIPsPerENI, c.maxPrefixesPerENI, err = c.GetIPv4Limit()
 		if err != nil {
 			return err
@@ -2030,7 +2030,6 @@ func (c *IPAMContext) initENIAndIPLimits() (err error) {
 
 	return nil
 }
-
 
 func (c *IPAMContext) isConfigValid() bool {
 	//Get Instance type
