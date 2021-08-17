@@ -469,14 +469,13 @@ func (c *IPAMContext) nodeInit() error {
 	}, 30*time.Second)
 
 	eniConfigName, err := eniconfig.GetNodeSpecificENIConfigName(ctx, c.cachedK8SClient)
-	if !c.enableIPv6 && err == nil && c.useCustomNetworking && eniConfigName != "default" {
+	if c.useCustomNetworking && eniConfigName != "default" {
 		// Signal to VPC Resource Controller that the node is using custom networking
 		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, eniConfigName)
 		if err != nil {
 			log.Errorf("Failed to set eniConfig node label", err)
 			podENIErrInc("nodeInit")
 			return err
-<<<<<<< HEAD
 		}
 	} else {
 		// Remove the custom networking label
@@ -486,17 +485,6 @@ func (c *IPAMContext) nodeInit() error {
 			podENIErrInc("nodeInit")
 			return err
 		}
-=======
-		}
-	} else {
-		// Remove the custom networking label
-		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, "")
-		if err != nil {
-			log.Errorf("Failed to delete eniConfig node label", err)
-			podENIErrInc("nodeInit")
-			return err
-		}
->>>>>>> fabc79e6... UT and Bug Fixes
 	}
 
 	if metadataResult.TrunkENI != "" {
@@ -511,7 +499,6 @@ func (c *IPAMContext) nodeInit() error {
 	} else {
 		// Check if we want to ask for one
 		c.askForTrunkENIIfNeeded(ctx)
-<<<<<<< HEAD
 	}
 
 	// For a new node, attach Cidrs (secondary ips/prefixes)
@@ -522,18 +509,6 @@ func (c *IPAMContext) nodeInit() error {
 		return err
 	}
 
-=======
-	}
-
-	// For a new node, attach Cidrs (secondary ips/prefixes)
-	increasedPool, err := c.tryAssignCidrs()
-	if err == nil && increasedPool {
-		c.updateLastNodeIPPoolAction()
-	} else if err != nil {
-		return err
-	}
-
->>>>>>> fabc79e6... UT and Bug Fixes
 	return nil
 }
 

@@ -466,7 +466,7 @@ func (ds *DataStore) writeBackingStoreUnsafe() error {
 				if addr.Assigned() {
 					entry := CheckpointEntry{
 						IPAMKey: addr.IPAMKey,
-						IP:    addr.Address,
+						IP:      addr.Address,
 					}
 					allocations = append(allocations, entry)
 				}
@@ -478,7 +478,7 @@ func (ds *DataStore) writeBackingStoreUnsafe() error {
 				if addr.Assigned() {
 					entry := CheckpointEntry{
 						IPAMKey: addr.IPAMKey,
-						IP:    addr.Address,
+						IP:      addr.Address,
 					}
 					allocations = append(allocations, entry)
 				}
