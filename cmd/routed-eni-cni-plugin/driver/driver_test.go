@@ -39,6 +39,7 @@ import (
 const (
 	testMAC          = "01:23:45:67:89:ab"
 	testIP           = "10.0.10.10"
+	testV6IP         = "2001:db8::1"
 	testContVethName = "eth0"
 	testHostVethName = "aws-eth0"
 	testVlanName     = "vlan.eth.1"
@@ -360,6 +361,21 @@ func TestSetupPodNetwork(t *testing.T) {
 	}
 	var cidrs []string
 	err := setupNS(testHostVethName, testContVethName, testnetnsPath, addr, &net.IPNet{}, testTable, cidrs, true, m.netlink, m.ns, mtu, log, m.procsys)
+	assert.NoError(t, err)
+}
+
+func TestSetupIPv6PodNetwork(t *testing.T) {
+	m := setup(t)
+	defer m.ctrl.Finish()
+
+	m.mockSetupPodNetworkWithFailureAt(t, "")
+	v6Addr := &net.IPNet{
+		IP:   net.ParseIP(testV6IP),
+		Mask: net.CIDRMask(128, 128),
+	}
+
+	var cidrs []string
+	err := setupNS(testHostVethName, testContVethName, testnetnsPath, &net.IPNet{}, v6Addr, testTable, cidrs, true, m.netlink, m.ns, mtu, log, m.procsys)
 	assert.NoError(t, err)
 }
 

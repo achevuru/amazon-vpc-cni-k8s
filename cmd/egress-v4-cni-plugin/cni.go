@@ -185,6 +185,11 @@ func setupContainerVeth(netns ns.NetNS, ifName string, mtu int, pr *current.Resu
 			}
 		}
 
+		//Block traffic to 169.254.172.0/22
+		err = snat.SetupRuleToBlockNodeLocalV4Access()
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -238,52 +243,7 @@ func setupHostVeth(vethName string, result *current.Result) error {
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, cniversion.All, fmt.Sprintf("egress-v4 CNI plugin %s", version))
-}
-
-/*
-func getNodePrimaryV4Address() (err error) {
-	sess := awssession.New()
-	ec2Metadata := ec2metadata.New(sess)
-	imds := awsutils.TypedIMDS{awsutils.InstrumentedIMDS{ec2Metadata}}
-	primaryV4IP,_ = imds.GetLocalIPv4(context.Background())
-	//log.Debugf("Node IP: %v, %s", primaryV4IP, primaryV4IP)
-	return err
-}
-*/
-
-func cmdCheck(args *skel.CmdArgs) error {
-	/*
-		netConf, log, err := loadConf(args.StdinData)
-		if err != nil {
-			return fmt.Errorf("failed to parse config: %v", err)
-		}
-		if netConf.PrevResult == nil {
-			log.Debugf("PrevResult is nil, re")
-			return fmt.Errorf("must be called as a chained plugin")
-		}
-
-		prevResult, err := current.GetResult(netConf.PrevResult)
-		if err != nil {
-			return err
-		}
-
-		chain := utils.MustFormatChainNameWithPrefix(netConf.Name, args.ContainerID, "E4-")
-		comment := utils.FormatComment(netConf.Name, args.ContainerID)
-
-		if netConf.SnatIP != nil {
-			for _, ipc := range prevResult.IPs {
-				if ipc.Version == "4" {
-					if err := snat.Snat4Check(netConf.SnatIP, ipc.Address.IP, chain, comment); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-	*/
-
-	return nil
+	skel.PluginMain(cmdAdd, nil, cmdDel, cniversion.All, fmt.Sprintf("egress-v4 CNI plugin %s", version))
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
@@ -339,6 +299,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	// NB: This uses netConf.IfName NOT args.IfName.
 	hostInterface, _, err := setupContainerVeth(netns, netConf.IfName, netConf.MTU, tmpResult)
 	if err != nil {
+		log.Debugf("failed to setup container Veth: %v", err)
 		return err
 	}
 

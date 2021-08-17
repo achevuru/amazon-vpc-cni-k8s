@@ -239,7 +239,9 @@ func TestSetupHostNetworkNodePortEnabled(t *testing.T) {
 		procSys: mockProcSys,
 	}
 
+	log.Debugf("mockIPtables.Dp state: ", mockIptables.dataplaneState)
 	setupNetLinkMocks(ctrl, mockNetLink)
+	log.Debugf("After: mockIPtables.Dp state: ", mockIptables.dataplaneState)
 
 	mockProcSys.EXPECT().Set("net/ipv4/conf/lo/rp_filter", "2").Return(nil)
 
@@ -723,6 +725,38 @@ func TestSetupHostNetworkMultipleCIDRs(t *testing.T) {
 
 	vpcCIDRs := []string{"10.10.0.0/16", "10.11.0.0/16"}
 	err := ln.SetupHostNetwork(vpcCIDRs, loopback, &testENINetIP, false, true, false)
+	assert.NoError(t, err)
+}
+
+func TestSetupHostNetworkWithIPv6Enabled(t *testing.T) {
+	ctrl, mockNetLink, _, mockNS, mockIptables, mockProcSys := setup(t)
+	defer ctrl.Finish()
+
+	ln := &linuxNetwork{
+		useExternalSNAT:         false,
+		excludeSNATCIDRs:        nil,
+		nodePortSupportEnabled:  true,
+		shouldConfigureRpFilter: true,
+		mainENIMark:             defaultConnmark,
+		mtu:                     testMTU,
+		vethPrefix:              eniPrefix,
+
+		netLink: mockNetLink,
+		ns:      mockNS,
+		newIptables: func(iptables.Protocol) (iptablesIface, error) {
+			return mockIptables, nil
+		},
+		procSys: mockProcSys,
+	}
+
+	setupNetLinkMocks(ctrl, mockNetLink)
+	mockProcSys.EXPECT().Set("net/ipv6/conf/all/disable_ipv6", "0").Return(nil)
+	mockProcSys.EXPECT().Set("net/ipv6/conf/all/forwarding", "1").Return(nil)
+	mockProcSys.EXPECT().Set("net/ipv6/conf/eth0/forwarding", "0").Return(nil)
+
+
+	var vpcCIDRs []string
+	err := ln.SetupHostNetwork(vpcCIDRs, loopback, &testENINetIP, false, false, true)
 	assert.NoError(t, err)
 }
 

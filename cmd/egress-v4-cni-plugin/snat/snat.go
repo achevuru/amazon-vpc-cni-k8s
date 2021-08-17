@@ -37,12 +37,20 @@ func iptRules4(target, src net.IP, chain, comment string, useRandomFully bool) [
 		args = append(args, "--random-fully")
 	}
 	rules = append(rules, args)
-
 	rules = append(rules, []string{"POSTROUTING", "-s", src.String(), "-j", chain, "-m", "comment", "--comment", comment})
 
 	return rules
 }
 
+func SetupRuleToBlockNodeLocalV4Access() error{
+	ipt, _ := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err := ipt.AppendUnique("filter", "OUTPUT", "-d", "169.254.172.0/22", "-m", "comment",
+			"--comment", "Block Node Local Pod access via IPv4", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed adding v4 drop route: %v", err)
+			}
+
+	return nil
+}
 // Snat4 SNATs IPv4 connections from `src` to `target`
 func Snat4(target, src net.IP, chain, comment string) error {
 	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)

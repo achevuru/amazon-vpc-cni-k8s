@@ -322,7 +322,7 @@ func New(rawK8SClient client.Client, cachedK8SClient client.Client) (*IPAMContex
 
 	c.primaryIP = make(map[string]string)
 	c.reconcileCooldownCache.cache = make(map[string]time.Time)
-	//v6 defaults for these values
+	//WARM and Min IP/Prefix targets are ignored in IPv6 mode
 	c.warmENITarget = getWarmENITarget()
 	c.warmIPTarget = getWarmIPTarget()
 	c.minimumIPTarget = getMinimumIPTarget()
@@ -347,15 +347,17 @@ func New(rawK8SClient client.Client, cachedK8SClient client.Client) (*IPAMContex
 
 	mac := c.awsClient.GetPrimaryENImac()
 
-	// retrieve security groups
-	err = c.awsClient.RefreshSGIDs(mac)
-	if err != nil {
-		return nil, err
-	}
+	if c.enableIPv4 {
+		// retrieve security groups
+		err = c.awsClient.RefreshSGIDs(mac)
+		if err != nil {
+			return nil, err
+		}
 
-	// Refresh security groups and VPC CIDR blocks in the background
-	// Ignoring errors since we will retry in 30s
-	go wait.Forever(func() { _ = c.awsClient.RefreshSGIDs(mac) }, 30*time.Second)
+		// Refresh security groups and VPC CIDR blocks in the background
+		// Ignoring errors since we will retry in 30s
+		go wait.Forever(func() { _ = c.awsClient.RefreshSGIDs(mac) }, 30*time.Second)
+	}
 	return c, nil
 }
 
@@ -368,12 +370,6 @@ func (c *IPAMContext) nodeInit() error {
 
 	log.Debugf("Start node init")
 
-	nodeMaxENI, err := c.getMaxENI()
-	if err != nil {
-		log.Error("Failed to get ENI limit")
-		return err
-	}
-	c.maxENI = nodeMaxENI
 	primaryV4IP := c.awsClient.GetLocalIPv4()
 	err = c.initENIAndIPLimits()
 	if c.enableIPv4 {
@@ -445,70 +441,74 @@ func (c *IPAMContext) nodeInit() error {
 		return err
 	}
 
-	//We will not support upgrading/converting an existing IPv4 cluster to operate in IPv6 mode. So, we will always start
-	//with a clean slate in IPv6 mode. We also don't have to deal with dynamic update of Prefix Delegation feature in IPv6
-	//mode as we don't support (yet) a non-PD v6 option. In addition, since we don't support custom networking mode with v6
-	//we will skip the corresponding setup.
-	if c.enableIPv4 {
-		if c.enablePrefixDelegation {
-			//During upgrade or if prefix delgation knob is disabled to enabled then we
-			//might have secondary IPs attached to ENIs so doing a cleanup if not used before moving on
-			c.tryUnassignIPsFromENIs()
-		} else {
-			//When prefix delegation knob is enabled to disabled then we might
-			//have unused prefixes attached to the ENIs so need to cleanup
-			c.tryUnassignPrefixesFromENIs()
-		}
 
-		if err = c.configureIPRulesForPods(); err != nil {
+	if c.enableIPv6 {
+		//We will not support upgrading/converting an existing IPv4 cluster to operate in IPv6 mode. So, we will always start
+		//with a clean slate in IPv6 mode. We also don't have to deal with dynamic update of Prefix Delegation feature in IPv6
+		//mode as we don't support (yet) a non-PD v6 option. In addition, since we don't support custom networking mode with v6
+		//we will skip the corresponding setup.
+		return nil
+	}
+
+	if c.enablePrefixDelegation {
+		//During upgrade or if prefix delgation knob is disabled to enabled then we
+		//might have secondary IPs attached to ENIs so doing a cleanup if not used before moving on
+		c.tryUnassignIPsFromENIs()
+	} else {
+		//When prefix delegation knob is enabled to disabled then we might
+		//have unused prefixes attached to the ENIs so need to cleanup
+		c.tryUnassignPrefixesFromENIs()
+	}
+
+	if err = c.configureIPRulesForPods(); err != nil {
+		return err
+	}
+	// Spawning updateCIDRsRulesOnChange go-routine
+	go wait.Forever(func() {
+		vpcV4CIDRs = c.updateCIDRsRulesOnChange(vpcV4CIDRs)
+	}, 30*time.Second)
+
+	eniConfigName, err := eniconfig.GetNodeSpecificENIConfigName(ctx, c.cachedK8SClient)
+	if !c.enableIPv6 && err == nil && c.useCustomNetworking && eniConfigName != "default" {
+		// Signal to VPC Resource Controller that the node is using custom networking
+		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, eniConfigName)
+		if err != nil {
+			log.Errorf("Failed to set eniConfig node label", err)
+			podENIErrInc("nodeInit")
 			return err
 		}
-		// Spawning updateCIDRsRulesOnChange go-routine
-		go wait.Forever(func() {
-			vpcV4CIDRs = c.updateCIDRsRulesOnChange(vpcV4CIDRs)
-		}, 30*time.Second)
-
-		eniConfigName, err := eniconfig.GetNodeSpecificENIConfigName(ctx, c.cachedK8SClient)
-		if !c.enableIPv6 && err == nil && c.useCustomNetworking && eniConfigName != "default" {
-			// Signal to VPC Resource Controller that the node is using custom networking
-			err := c.SetNodeLabel(ctx, vpcENIConfigLabel, eniConfigName)
-			if err != nil {
-				log.Errorf("Failed to set eniConfig node label", err)
-				podENIErrInc("nodeInit")
-				return err
-			}
-		} else {
-			// Remove the custom networking label
-			err := c.SetNodeLabel(ctx, vpcENIConfigLabel, "")
-			if err != nil {
-				log.Errorf("Failed to delete eniConfig node label", err)
-				podENIErrInc("nodeInit")
-				return err
-			}
-		}
-
-		if metadataResult.TrunkENI != "" {
-			// Signal to VPC Resource Controller that the node has a trunk already
-			err := c.SetNodeLabel(ctx, "vpc.amazonaws.com/has-trunk-attached", "true")
-			if err != nil {
-				log.Errorf("Failed to set node label", err)
-				podENIErrInc("nodeInit")
-				// If this fails, we probably can't talk to the API server. Let the pod restart
-				return err
-			}
-		} else {
-			// Check if we want to ask for one
-			c.askForTrunkENIIfNeeded(ctx)
-		}
-
-		// For a new node, attach Cidrs (secondary ips/prefixes)
-		increasedPool, err := c.tryAssignCidrs()
-		if err == nil && increasedPool {
-			c.updateLastNodeIPPoolAction()
-		} else if err != nil {
+	} else {
+		// Remove the custom networking label
+		err := c.SetNodeLabel(ctx, vpcENIConfigLabel, "")
+		if err != nil {
+			log.Errorf("Failed to delete eniConfig node label", err)
+			podENIErrInc("nodeInit")
 			return err
 		}
 	}
+
+	if metadataResult.TrunkENI != "" {
+		// Signal to VPC Resource Controller that the node has a trunk already
+		err := c.SetNodeLabel(ctx, "vpc.amazonaws.com/has-trunk-attached", "true")
+		if err != nil {
+			log.Errorf("Failed to set node label", err)
+			podENIErrInc("nodeInit")
+			// If this fails, we probably can't talk to the API server. Let the pod restart
+			return err
+		}
+	} else {
+		// Check if we want to ask for one
+		c.askForTrunkENIIfNeeded(ctx)
+	}
+
+	// For a new node, attach Cidrs (secondary ips/prefixes)
+	increasedPool, err := c.tryAssignCidrs()
+	if err == nil && increasedPool {
+		c.updateLastNodeIPPoolAction()
+	} else if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -562,7 +562,7 @@ func (c *IPAMContext) updateIPStats(unmanaged int) {
 func (c *IPAMContext) StartNodeIPPoolManager() {
 	if c.enableIPv6 {
 		//Nothing to do in IPv6 Mode. IPv6 is only supported in Prefix delegation mode
-		//and we only require one Prefix attached.
+		//and VPC CNI will only attach one V6 Prefix.
 		return
 	}
 	sleepDuration := ipPoolMonitorInterval / 2
@@ -862,32 +862,37 @@ func (c *IPAMContext) tryAssignIPs() (increasedPool bool, err error) {
 	return false, nil
 }
 
-func (c *IPAMContext) checkAndAssignIPv6Prefix(eniID string) error {
-	log.Debugf("In checkAndAssignIPv6Prefix for ENI: %s", eniID)
+func (c *IPAMContext) assignIPv6Prefix(eniID string) (err error) {
+	log.Debugf("In assignIPv6Prefix for ENI: %s", eniID)
 	//Let's make an EC2 API call to get a list of IPv6 prefixes (if any) that are already attached to the
 	//current ENI. We will make this call only once during boot up/init and doing so will shield us from any
 	//IMDS out of sync issues. We only need one v6 prefix per ENI/Node.
-	ec2Prefixes, err := c.awsClient.GetIPv6PrefixesFromEC2(eniID)
+	var ec2v6Prefixes []*ec2.Ipv6PrefixSpecification
+	ec2v6Prefixes, err = c.awsClient.GetIPv6PrefixesFromEC2(eniID)
 	if err != nil {
-		log.Errorf("checkAndAssignIPv6Prefix; err: %s", err)
+		log.Errorf("assignIPv6Prefix; err: %s", err)
 		return err
 	}
-	log.Debugf("ENI %s has %s prefixes attached", eniID, len(ec2Prefixes))
+	log.Debugf("ENI %s has %v prefixe(s) attached", eniID, len(ec2v6Prefixes))
 
-	//Note: If we find more than one v6 prefix attached to the ENI? VPC CNI will not do it so it must've been
-	//attached by the user. So, we will not attempt to free the additional Prefixes. We can always add the first prefix
-	//to our datastore and use it to allocate IPs.
+	//Note: If we find more than one v6 prefix attached to the ENI, VPC CNI will not attempt to free it. VPC CNI
+	//will only attach a single v6 prefix and it will not attempt to free the additional Prefixes.
+	//We can always add the first prefix to our datastore and use it to allocate IPs.
 
 	//Check if we already have a v6 Prefix attached
-	if len(ec2Prefixes) == 0 {
+	if len(ec2v6Prefixes) == 0 {
 		//Allocate and attach a v6 Prefix to Primary ENI
-		log.Debugf("In checkAndAssignIPv6Prefix:- calling AllocIPv6Prefixes for ENI: %s", eniID)
-		err = c.awsClient.AllocIPv6Prefixes(eniID)
+		log.Debugf("In assignIPv6Prefix:- calling AllocIPv6Prefixes for ENI: %s", eniID)
+		strPrefixes, err := c.awsClient.AllocIPv6Prefixes(eniID)
 		if err != nil {
 			return err
 		}
+		for _, v6Prefix := range strPrefixes {
+			ec2v6Prefixes = append(ec2v6Prefixes, &ec2.Ipv6PrefixSpecification{Ipv6Prefix: v6Prefix})
+		}
+		log.Debugf("Successfully allocated IPv6Prefixes for ENI: %s", eniID)
 	}
-	c.addENIv6prefixesToDataStore(ec2Prefixes, eniID)
+	c.addENIv6prefixesToDataStore(ec2v6Prefixes, eniID)
 	return nil
 }
 
@@ -937,7 +942,7 @@ func (c *IPAMContext) setupENI(eni string, eniMetadata awsutils.ENIMetadata, isT
 		//In v6 PD Mode, we only need and manage primary ENI. Once we start supporting secondary IP and custom networking modes
 		//for v6, we will relax this restriction. We filter out all the ENIs except Primary ENI in v6 mode, but included
 		//the primary ENI check as a safety net.
-		err := c.checkAndAssignIPv6Prefix(eni)
+		err := c.assignIPv6Prefix(eni)
 		if err != nil {
 			return errors.Wrapf(err, "Failed to allocate IPv6 Prefixes to Primary ENI")
 		}
@@ -1025,7 +1030,7 @@ func (c *IPAMContext) addENIv6prefixesToDataStore(ec2PrefixAddrs []*ec2.Ipv6Pref
 			ipamdErrInc("addENIv6prefixesToDataStoreFailed")
 		}
 	}
-	_, _, totalPrefix := c.dataStore.GetStats("6") //TODO - Valid values for v6 Prefixes
+	_, _, totalPrefix := c.dataStore.GetStats("6")
 	log.Debugf("Datastore Pool stats: total v6 prefixes(/80): %d", totalPrefix)
 }
 
@@ -2017,6 +2022,13 @@ func (c *IPAMContext) getPrefixesNeeded() int {
 
 func (c *IPAMContext) initENIAndIPLimits() (err error) {
 	if c.enableIPv4 {
+		nodeMaxENI, err := c.getMaxENI()
+		if err != nil {
+			log.Error("Failed to get ENI limit")
+			return err
+		}
+		c.maxENI = nodeMaxENI
+
 		c.maxIPsPerENI, c.maxPrefixesPerENI, err = c.GetIPv4Limit()
 		if err != nil {
 			return err
@@ -2063,8 +2075,8 @@ func (c *IPAMContext) isConfigValid() bool {
 	}
 
 	//Validate v6 and SGPP support.
-	if c.enableIPv6 && c.enablePodENI {
-		log.Errorf("Security Group Per Pod feature is not supported in IPv6 mode")
+	if c.enableIPv6 && (c.enablePodENI || c.useCustomNetworking) {
+		log.Errorf("Security Group Per Pod feature and Custom Networking are not supported in IPv6 mode")
 		return false
 	}
 	return true

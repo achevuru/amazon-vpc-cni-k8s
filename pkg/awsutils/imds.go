@@ -93,9 +93,8 @@ func (imds TypedIMDS) GetLocalIPv4(ctx context.Context) (net.IP, error) {
 	return imds.getIP(ctx, "local-ipv4")
 }
 
-// GetLocalIPv6 returns the private (primary) IPv6 address of the instance.
-//TODO - Apurup - Don't really need it. We are not SNAT'ing anyways..so
-func (imds TypedIMDS) GetLocalIPv6(ctx context.Context) (net.IP, error) {
+// GetLocalIPv6s returns the IPv6 addresses of the instance.
+func (imds TypedIMDS) GetLocalIPv6s(ctx context.Context) (net.IP, error) {
 	return imds.getIP(ctx, "ipv6s")
 }
 
@@ -311,7 +310,6 @@ func (imds TypedIMDS) GetLocalIPv4Prefixes(ctx context.Context, mac string) ([]n
 }
 
 // GetLocalIPv4Prefixes returns the IPv4 prefixes delegated to this interface
-//TODO - Check the below path
 func (imds TypedIMDS) GetLocalIPv6Prefixes(ctx context.Context, mac string) ([]net.IPNet, error) {
 	key := fmt.Sprintf("network/interfaces/macs/%s/ipv6-prefix", mac)
 	prefixes, err := imds.getCIDRs(ctx, key)

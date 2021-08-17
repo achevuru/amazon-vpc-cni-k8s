@@ -16,7 +16,6 @@ package driver
 
 import (
 	"fmt"
-	"github.com/prometheus/common/log"
 	"net"
 	"os"
 	"syscall"
@@ -165,7 +164,6 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	var maskLen int
 	var addr *netlink.Addr
 	var defNet *net.IPNet
-	addr = &netlink.Addr{IPNet: createVethContext.v6Addr}
 
 	if createVethContext.v4Addr != nil {
 		gwIP = "169.254.1.1"
@@ -181,7 +179,6 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 
 	gw := net.ParseIP(gwIP)
 	gwNet := &net.IPNet{IP: gw, Mask: net.CIDRMask(maskLen, maskLen)}
-	log.Debugf("CVC - gw: %v ; gwNET %v\n", gw, gwNet)
 
 	if err = createVethContext.netLink.RouteReplace(&netlink.Route{
 		LinkIndex: contVeth.Attrs().Index,
@@ -192,13 +189,6 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 
 	// Add a default route via dummy next hop(169.254.1.1 or fe80::1). Then all outgoing traffic will be routed by this
 	// default route via dummy next hop (169.254.1.1 or fe80::1)
-	/*
-		if err = createVethContext.ip.AddDefaultRoute(gwNet.IP, contVeth); err != nil {
-			return errors.Wrap(err, "setup NS network: failed to add default route")
-		}
-	*/
-
-	//_, v6DefaultPrefix, _ := net.ParseCIDR("::/0")
 	if err = createVethContext.netLink.RouteAdd(&netlink.Route{
 		LinkIndex: contVeth.Attrs().Index,
 		Scope:     netlink.SCOPE_UNIVERSE,
@@ -322,23 +312,6 @@ func setupVeth(hostVethName string, contVethName string, netnsPath string, v4Add
 		return nil, errors.Wrapf(err, "setupVeth network: failed to find link %q", hostVethName)
 	}
 
-	if v6Addr != nil && v6Addr.IP.To16() != nil {
-		//Make sure IPv6 is enabled on host veth interface
-		if err = procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/disable_ipv6", hostVethName), "0"); err != nil {
-			if !os.IsNotExist(err) {
-				return nil, errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on hostVeth interface")
-			}
-		}
-
-		//Make sure IPv6 forwarding is enabled on host veth interface
-		if err = procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/forwarding", hostVethName), "1"); err != nil {
-			if !os.IsNotExist(err) {
-				return nil, errors.Wrapf(err, "setupVeth network: failed to enable IPv6 forwarding on hostVeth interface")
-			}
-		}
-	}
-
-	// NB: Must be set after move to host namespace, or kernel will reset to defaults.
 	if err := procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/accept_ra", hostVethName), "0"); err != nil {
 		if !os.IsNotExist(err) {
 			return nil, errors.Wrapf(err, "setupVeth network: failed to disable IPv6 router advertisements")

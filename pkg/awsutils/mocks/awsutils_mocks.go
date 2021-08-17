@@ -93,11 +93,12 @@ func (mr *MockAPIsMockRecorder) AllocIPAddresses(arg0, arg1 interface{}) *gomock
 }
 
 // AllocIPv6Prefixes mocks base method
-func (m *MockAPIs) AllocIPv6Prefixes(arg0 string) error {
+func (m *MockAPIs) AllocIPv6Prefixes(arg0 string) ([]*string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AllocIPv6Prefixes", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].([]*string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // AllocIPv6Prefixes indicates an expected call of AllocIPv6Prefixes
@@ -294,20 +295,6 @@ func (m *MockAPIs) GetLocalIPv4() net.IP {
 func (mr *MockAPIsMockRecorder) GetLocalIPv4() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLocalIPv4", reflect.TypeOf((*MockAPIs)(nil).GetLocalIPv4))
-}
-
-// GetLocalIPv6 mocks base method
-func (m *MockAPIs) GetLocalIPv6() net.IP {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetLocalIPv6")
-	ret0, _ := ret[0].(net.IP)
-	return ret0
-}
-
-// GetLocalIPv6 indicates an expected call of GetLocalIPv6
-func (mr *MockAPIsMockRecorder) GetLocalIPv6() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLocalIPv6", reflect.TypeOf((*MockAPIs)(nil).GetLocalIPv6))
 }
 
 // GetPrimaryENI mocks base method

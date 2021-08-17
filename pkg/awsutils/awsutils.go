@@ -142,7 +142,7 @@ type APIs interface {
 	DeallocPrefixAddresses(eniID string, ips []string) error
 
 	//AllocIPv6Prefixes allocates IPv6 prefixes to the ENI passed in
-	AllocIPv6Prefixes(eniID string) error
+	AllocIPv6Prefixes(eniID string) ([]*string, error)
 
 	// GetVPCIPv4CIDRs returns VPC's IPv4 CIDRs from instance metadata
 	GetVPCIPv4CIDRs() ([]string, error)
@@ -152,9 +152,6 @@ type APIs interface {
 
 	// GetVPCIPv6CIDRs returns VPC's IPv6 CIDRs from instance metadata
 	GetVPCIPv6CIDRs() ([]string, error)
-
-	// GetLocalIPv6 returns the primary IPv6 address on the primary ENI interface
-	GetLocalIPv6() net.IP
 
 	// GetPrimaryENI returns the primary ENI
 	GetPrimaryENI() string
@@ -205,7 +202,6 @@ type EC2InstanceMetadataCache struct {
 	securityGroups   StringSet
 	subnetID         string
 	localIPv4        net.IP
-	localIPv6        net.IP
 	v4Enabled        bool
 	v6Enabled        bool
 	instanceID       string
@@ -218,7 +214,7 @@ type EC2InstanceMetadataCache struct {
 	unmanagedENIs       StringSet
 	useCustomNetworking bool
 	cniunmanagedENIs    StringSet
-	usePrefixDelegation bool
+	enablePrefixDelegation bool
 
 	clusterName       string
 	additionalENITags map[string]string
@@ -414,9 +410,9 @@ func New(useCustomNetworking, v4Enabled, v6Enabled bool) (*EC2InstanceMetadataCa
 	return cache, nil
 }
 
-func (cache *EC2InstanceMetadataCache) InitCachedPrefixDelegation(enableIpv4PrefixDelegation bool) {
-	cache.usePrefixDelegation = enableIpv4PrefixDelegation
-	log.Infof("Prefix Delegation enabled %v", cache.usePrefixDelegation)
+func (cache *EC2InstanceMetadataCache) InitCachedPrefixDelegation(enablePrefixDelegation bool) {
+	cache.enablePrefixDelegation = enablePrefixDelegation
+	log.Infof("Prefix Delegation enabled %v", cache.enablePrefixDelegation)
 }
 
 // InitWithEC2metadata initializes the EC2InstanceMetadataCache with the data retrieved from EC2 metadata service
@@ -435,17 +431,6 @@ func (cache *EC2InstanceMetadataCache) initWithEC2Metadata(ctx context.Context) 
 		return err
 	}
 	log.Debugf("Discovered the instance primary IPv4 address: %s", cache.localIPv4)
-
-	//retrieve eth0 local-ipv6
-	if cache.v6Enabled {
-		/*
-			cache.localIPv6, err = cache.imds.GetIPv6s(ctx)
-			if err != nil {
-				return err
-			}
-			log.Debugf("Discovered the instance primary IPv6 address: %s", cache.localIPv6)
-		*/
-	}
 
 	// retrieve instance-id
 	cache.instanceID, err = cache.imds.GetInstanceID(ctx)
@@ -493,10 +478,6 @@ func (cache *EC2InstanceMetadataCache) initWithEC2Metadata(ctx context.Context) 
 
 // RefreshSGIDs retrieves security groups
 func (cache *EC2InstanceMetadataCache) RefreshSGIDs(mac string) error {
-	if cache.v6Enabled {
-		//Skip for now
-		return nil
-	}
 	ctx := context.TODO()
 
 	sgIDs, err := cache.imds.GetSecurityGroupIDs(ctx, mac)
@@ -638,14 +619,25 @@ func (cache *EC2InstanceMetadataCache) getENIMetadata(eniMAC string) (ENIMetadat
 	}
 
 	var ec2ipv4Prefixes []*ec2.Ipv4PrefixSpecification
-	// Get prefix on primary ENI when custom networking is enabled is not needed.
-	// If primary ENI has prefixes attached and then we move to custom networking, we don't need to fetch
-	// the prefix since recommendation is to terminate the nodes and that would have deleted the prefix on the
-	// primary ENI.
-	if (eniMAC == primaryMAC && !cache.useCustomNetworking) || (eniMAC != primaryMAC) {
-		log.Debugf("Calling  GetLocalIpv4Prefixes...")
+	var ec2ipv6Prefixes []*ec2.Ipv6PrefixSpecification
+
+	// If IPv6 is enabled, get attached v6 prefixes.
+	if cache.v6Enabled {
+		imdsIPv6Prefixes, err := cache.imds.GetLocalIPv6Prefixes(ctx, eniMAC)
+		if err != nil {
+			return ENIMetadata{}, err
+		}
+		for _, ipv6prefix := range imdsIPv6Prefixes {
+			ec2ipv6Prefixes = append(ec2ipv6Prefixes, &ec2.Ipv6PrefixSpecification{
+				Ipv6Prefix: aws.String(ipv6prefix.String()),
+			})
+		}
+	} else if cache.v4Enabled && ((eniMAC == primaryMAC && !cache.useCustomNetworking) || (eniMAC != primaryMAC)) {
+		// Get prefix on primary ENI when custom networking is enabled is not needed.
+		// If primary ENI has prefixes attached and then we move to custom networking, we don't need to fetch
+		// the prefix since recommendation is to terminate the nodes and that would have deleted the prefix on the
+		// primary ENI.
 		imdsIPv4Prefixes, err := cache.imds.GetLocalIPv4Prefixes(ctx, eniMAC)
-		log.Debugf("GetLocalIpv4Prefixes responded...")
 		if err != nil {
 			return ENIMetadata{}, err
 		}
@@ -663,6 +655,7 @@ func (cache *EC2InstanceMetadataCache) getENIMetadata(eniMAC string) (ENIMetadat
 		SubnetIPv4CIDR: cidr.String(),
 		IPv4Addresses:  ec2ip4s,
 		IPv4Prefixes:   ec2ipv4Prefixes,
+		IPv6Prefixes:   ec2ipv6Prefixes,
 	}, nil
 }
 
@@ -1396,10 +1389,10 @@ func (cache *EC2InstanceMetadataCache) AllocIPAddresses(eniID string, numIPs int
 	}
 
 	log.Infof("Trying to allocate %d IP addresses on ENI %s", needIPs, eniID)
-	log.Debugf("PD enabled - %t", cache.usePrefixDelegation)
+	log.Debugf("PD enabled - %t", cache.enablePrefixDelegation)
 	input := &ec2.AssignPrivateIpAddressesInput{}
 
-	if cache.usePrefixDelegation {
+	if cache.enablePrefixDelegation {
 		needPrefixes := needIPs
 		input = &ec2.AssignPrivateIpAddressesInput{
 			NetworkInterfaceId: aws.String(eniID),
@@ -1427,7 +1420,7 @@ func (cache *EC2InstanceMetadataCache) AllocIPAddresses(eniID string, numIPs int
 		return errors.Wrap(err, "allocate IP address: failed to allocate a private IP address")
 	}
 	if output != nil {
-		if cache.usePrefixDelegation {
+		if cache.enablePrefixDelegation {
 			log.Infof("Allocated %d private IP prefixes", len(output.AssignedIpv4Prefixes))
 		} else {
 			log.Infof("Allocated %d private IP addresses", len(output.AssignedPrivateIpAddresses))
@@ -1436,7 +1429,7 @@ func (cache *EC2InstanceMetadataCache) AllocIPAddresses(eniID string, numIPs int
 	return nil
 }
 
-func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes(eniID string) error {
+func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes(eniID string) ([]*string, error) {
 	//We only need to allocate one IPv6 prefix per ENI.
 	input := &ec2.AssignIpv6AddressesInput{
 		NetworkInterfaceId: aws.String(eniID),
@@ -1445,16 +1438,15 @@ func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes(eniID string) error {
 	start := time.Now()
 	output, err := cache.ec2SVC.AssignIpv6AddressesWithContext(context.Background(), input)
 	awsAPILatency.WithLabelValues("AssignIpv6AddressesWithContext", fmt.Sprint(err != nil), awsReqStatus(err)).Observe(msSince(start))
-	log.Debugf("AllocIPv6prefixes, err: %v", err)
 	if err != nil {
 		log.Errorf("Failed to allocate IPv6 Prefixes on ENI %v: %v", eniID, err)
 		awsAPIErrInc("AssignPrivateIpv6Addresses", err)
-		return errors.Wrap(err, "allocate IPv6 prefix: failed to allocate an IPv6 prefix address")
+		return nil, errors.Wrap(err, "allocate IPv6 prefix: failed to allocate an IPv6 prefix address")
 	}
 	if output != nil {
 		log.Debugf("Allocated %d private IPv6 prefixes", len(output.AssignedIpv6Prefixes))
 	}
-	return nil
+	return output.AssignedIpv6Prefixes, nil
 }
 
 // WaitForENIAndIPsAttached waits until the ENI has been attached and the secondary IPs have been added
@@ -1478,8 +1470,13 @@ func (cache *EC2InstanceMetadataCache) waitForENIAndIPsAttached(eni string, want
 			if eni == returnedENI.ENIID {
 				// Check how many Secondary IPs or Prefixes have been attached
 				var eniIPCount int
-				if cache.usePrefixDelegation {
+				log.Debugf("ENI ID: %v IP Addr: %s, Prefixes:- %v", returnedENI.ENIID,
+					returnedENI.IPv4Addresses, returnedENI.IPv4Prefixes)
+				if cache.enablePrefixDelegation {
 					eniIPCount = len(returnedENI.IPv4Prefixes)
+					if cache.v6Enabled {
+						eniIPCount = len(returnedENI.IPv6Prefixes)
+					}
 				} else {
 					//Ignore primary IP of the ENI
 					//wantedCidrs will be at most 1 less then the IP limit for the ENI because of the primary IP in secondary pod
@@ -1507,11 +1504,11 @@ func (cache *EC2InstanceMetadataCache) waitForENIAndIPsAttached(eni string, want
 	if err != nil {
 		// If we have at least 1 Secondary IP, by now return what we have without an error
 		if err == ErrAllSecondaryIPsNotFound {
-			if !cache.usePrefixDelegation && len(eniMetadata.IPv4Addresses) > 1 {
+			if !cache.enablePrefixDelegation && len(eniMetadata.IPv4Addresses) > 1 {
 				// We have some Secondary IPs, return the ones we have
 				log.Warnf("This ENI only has %d IP addresses, we wanted %d", len(eniMetadata.IPv4Addresses), wantedCidrs)
 				return eniMetadata, nil
-			} else if cache.usePrefixDelegation && len(eniMetadata.IPv4Prefixes) > 1 {
+			} else if cache.enablePrefixDelegation && len(eniMetadata.IPv4Prefixes) > 1 {
 				// We have some prefixes, return the ones we have
 				log.Warnf("This ENI only has %d Prefixes, we wanted %d", len(eniMetadata.IPv4Prefixes), wantedCidrs)
 				return eniMetadata, nil
@@ -1742,18 +1739,12 @@ func (cache *EC2InstanceMetadataCache) GetVPCIPv6CIDRs() ([]string, error) {
 		return nil, err
 	}
 
-	// TODO: keep as net.IPNet and remove this round-trip to/from string
 	asStrs := make([]string, len(ipnets))
 	for i, ipnet := range ipnets {
 		asStrs[i] = ipnet.String()
 	}
 
 	return asStrs, nil
-}
-
-// GetLocalIPv6 returns the primary IPv6 address on the primary interface
-func (cache *EC2InstanceMetadataCache) GetLocalIPv6() net.IP {
-	return cache.localIPv6
 }
 
 // GetPrimaryENI returns the primary ENI

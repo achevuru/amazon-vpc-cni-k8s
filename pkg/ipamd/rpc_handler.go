@@ -141,7 +141,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 			NetworkName: in.NetworkName,
 		}
 		//addr, deviceNumber, err = s.ipamContext.dataStore.AssignPodIPv4Address(ipamKey)
-		ipv4Addr, ipv6Addr, deviceNumber, err = s.ipamContext.dataStore.AssignPodIPAddress(ipamKey, s.ipamContext.enableIPv4, s.ipamContext.enableIPv6, in.Netns)
+		ipv4Addr, ipv6Addr, deviceNumber, err = s.ipamContext.dataStore.AssignPodIPAddress(ipamKey, s.ipamContext.enableIPv4, s.ipamContext.enableIPv6)
 	}
 
 	var pbVPCV4cidrs, pbVPCV6cidrs []string
@@ -215,8 +215,8 @@ func (s *server) DelNetwork(ctx context.Context, in *rpc.DelNetworkRequest) (*rp
 	eni, ip, deviceNumber, err := s.ipamContext.dataStore.UnassignPodIPAddress(ipamKey)
 	cidr := net.IPNet{IP: net.ParseIP(ip), Mask: net.IPv4Mask(255, 255, 255, 255)}
 	cidrStr := cidr.String()
-	if eni != nil {
-		//cidrStr will be pod IP i.e, IP/32.
+	if s.ipamContext.enableIPv4 && eni != nil {
+		//cidrStr will be pod IP i.e, IP/32 for v4 (or) IP/128 for v6.
 		// Case 1: PD is enabled but IP/32 key in AvailableIPv4Cidrs[cidrStr] exists, this means it is a secondary IP. Added IsPrefix check just for sanity.
 		// So this IP should be released immediately.
 		// Case 2: PD is disabled then IP/32 key in AvailableIPv4Cidrs[cidrStr] will not exists since key to AvailableIPv4Cidrs will be either /28 prefix or /32

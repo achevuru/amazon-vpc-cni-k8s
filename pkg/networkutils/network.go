@@ -225,6 +225,29 @@ func findPrimaryInterfaceName(primaryMAC string) (string, error) {
 	return "", errors.New("no primary interface found")
 }
 
+func (n *linuxNetwork) enableIPv6() (err error) {
+	//Make sure IPv6 is enabled on host interfaces
+	if err = n.procSys.Set(fmt.Sprintf("net/ipv6/conf/all/disable_ipv6"), "0"); err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on hostVeth interface")
+		}
+	}
+	//Make sure IPv6 forwarding is enabled on all host interfaces
+	if err = n.procSys.Set(fmt.Sprintf("net/ipv6/conf/all/forwarding"), "1"); err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 forwarding on all host interfaces")
+		}
+	}
+
+	//Let's disable ipv6 forwarding on eth0 (Primary ENI). We will direct external v6 traffic via GW
+	if err = n.procSys.Set(fmt.Sprintf("net/ipv6/conf/eth0/forwarding"), "0"); err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "setupVeth network: failed to disable IPv6 forwarding on eth0 interface")
+		}
+	}
+	return nil
+}
+
 // SetupHostNetwork performs node level network configuration
 func (n *linuxNetwork) SetupHostNetwork(vpcv4CIDRs []string, primaryMAC string, primaryAddr *net.IP, enablePodENI bool,
 	v4Enabled bool, v6Enabled bool) error {
@@ -272,6 +295,9 @@ func (n *linuxNetwork) SetupHostNetwork(vpcv4CIDRs []string, primaryMAC string, 
 	ipFamily := unix.AF_INET
 	if v6Enabled {
 		ipFamily = unix.AF_INET6
+		if err := n.enableIPv6(); err != nil {
+			return errors.Wrapf(err, "failed to enable IPv6")
+		}
 	}
 
 	// If node port support is enabled, add a rule that will force force marked traffic out of the main ENI.  We then
@@ -338,14 +364,16 @@ func (n *linuxNetwork) updateHostIptablesRules(vpcCIDRs []string, primaryMAC str
 	if err != nil {
 		return errors.Wrapf(err, "failed to SetupHostNetwork")
 	}
+
 	ipProtocol := iptables.ProtocolIPv4
-	if v6Enabled {
+	if v6Enabled{
 		//Essentially a stub function for now in V6 mode. We will need it when we support v6 in secondary IP and
 		//custom networking modes. We don't need to install any SNAT rules in v6 mode and currently there is no need
 		//to mark packets entering via Primary ENI as all the pods in v6 mode will be behind primary ENI. Will have to
 		//start doing that once we start supporting custom networking mode in v6.
 		ipProtocol = iptables.ProtocolIPv6
 	}
+
 	ipt, err := n.newIptables(ipProtocol)
 	if err != nil {
 		return errors.Wrap(err, "host network setup: failed to create iptables")

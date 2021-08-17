@@ -65,6 +65,8 @@ const (
 	prefix02      = "10.10.40.0/28"
 	ipaddrPD01    = "10.10.30.0"
 	ipaddrPD02    = "10.10.40.0"
+	v6ipaddr01    = "2001:db8::1/128"
+	v6prefix01    = "2001:db8::/64"
 )
 
 type testMocks struct {
@@ -176,7 +178,7 @@ func TestNodeInit(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestNodeInitwithPDenabled(t *testing.T) {
+func TestNodeInitwithPDenabledIPv4Mode(t *testing.T) {
 	m := setup(t)
 	defer m.ctrl.Finish()
 	ctx := context.Background()
@@ -246,6 +248,76 @@ func TestNodeInitwithPDenabled(t *testing.T) {
 
 	//m.network.EXPECT().UseExternalSNAT().Return(false)
 	m.network.EXPECT().UpdateRuleListBySrc(gomock.Any(), gomock.Any())
+
+	fakeNode := v1.Node{
+		TypeMeta:   metav1.TypeMeta{Kind: "Node"},
+		ObjectMeta: metav1.ObjectMeta{Name: myNodeName},
+		Spec:       v1.NodeSpec{},
+		Status:     v1.NodeStatus{},
+	}
+	_ = m.cachedK8SClient.Create(ctx, &fakeNode)
+
+	err := mockContext.nodeInit()
+	assert.NoError(t, err)
+}
+
+func TestNodeInitwithPDenabledIPv6Mode(t *testing.T) {
+	m := setup(t)
+	defer m.ctrl.Finish()
+	ctx := context.Background()
+
+	fakeCheckpoint := datastore.CheckpointData{
+		Version: datastore.CheckpointFormatVersion,
+		Allocations: []datastore.CheckpointEntry{
+			{IPAMKey: datastore.IPAMKey{NetworkName: "net0", ContainerID: "sandbox-id", IfName: "eth0"}, IP: ipaddrPD01},
+		},
+	}
+
+	mockContext := &IPAMContext{
+		awsClient:              m.awsutils,
+		rawK8SClient:           m.rawK8SClient,
+		cachedK8SClient:        m.cachedK8SClient,
+		maxIPsPerENI:           224,
+		maxPrefixesPerENI:      1,
+		maxENI:                 1,
+		warmENITarget:          1,
+		warmIPTarget:           1,
+		primaryIP:              make(map[string]string),
+		terminating:            int32(0),
+		networkClient:          m.network,
+		dataStore:              datastore.NewDataStore(log, datastore.NewTestCheckpoint(fakeCheckpoint), true),
+		myNodeName:             myNodeName,
+		enablePrefixDelegation: true,
+		enableIPv4:             false,
+		enableIPv6:             true,
+	}
+	mockContext.dataStore.CheckpointMigrationPhase = 2
+
+	eni1 := getDummyENIMetadataWithV6Prefix()
+
+	var cidrs []string
+	m.awsutils.EXPECT().IsUnmanagedENI(eni1.ENIID).Return(false).AnyTimes()
+	m.awsutils.EXPECT().TagENI(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	m.awsutils.EXPECT().IsCNIUnmanagedENI(eni1.ENIID).Return(false).AnyTimes()
+
+	primaryIP := net.ParseIP(ipaddr01)
+	m.network.EXPECT().SetupHostNetwork(cidrs, eni1.MAC, &primaryIP, false, false, true).Return(nil)
+	m.awsutils.EXPECT().GetIPv6PrefixesFromEC2(eni1.ENIID).AnyTimes().Return(eni1.IPv6Prefixes, nil)
+	m.awsutils.EXPECT().GetPrimaryENI().AnyTimes().Return(primaryENIid)
+	m.awsutils.EXPECT().GetPrimaryENImac().Return(eni1.MAC)
+	m.awsutils.EXPECT().IsPrimaryENI(primaryENIid).Return(true).AnyTimes()
+
+
+	eniMetadataSlice := []awsutils.ENIMetadata{eni1}
+	resp := awsutils.DescribeAllENIsResult{
+		ENIMetadata: eniMetadataSlice,
+		TagMap:      map[string]awsutils.TagMap{},
+		TrunkENI:    "",
+		EFAENIs:     make(map[string]bool),
+	}
+	m.awsutils.EXPECT().DescribeAllENIs().Return(resp, nil)
+	m.awsutils.EXPECT().GetLocalIPv4().Return(primaryIP)
+	m.awsutils.EXPECT().SetCNIUnmanagedENIs(resp.MultiCardENIIDs).AnyTimes()
 
 	fakeNode := v1.Node{
 		TypeMeta:   metav1.TypeMeta{Kind: "Node"},
@@ -332,6 +404,30 @@ func getDummyENIMetadataWithPrefix() (awsutils.ENIMetadata, awsutils.ENIMetadata
 		},
 	}
 	return eni1, eni2
+}
+
+func getDummyENIMetadataWithV6Prefix() awsutils.ENIMetadata {
+	primary := true
+	testAddr1 := v6ipaddr01
+	testv6Prefix := v6prefix01
+	eni1 := awsutils.ENIMetadata{
+		ENIID:          primaryENIid,
+		MAC:            primaryMAC,
+		DeviceNumber:   primaryDevice,
+		SubnetIPv4CIDR: primarySubnet,
+		IPv4Addresses: []*ec2.NetworkInterfacePrivateIpAddress{
+			{
+				PrivateIpAddress: &testAddr1, Primary: &primary,
+			},
+		},
+		IPv6Prefixes: []*ec2.Ipv6PrefixSpecification{
+			{
+				Ipv6Prefix: &testv6Prefix,
+			},
+		},
+	}
+
+	return eni1
 }
 
 func TestIncreaseIPPoolDefault(t *testing.T) {
