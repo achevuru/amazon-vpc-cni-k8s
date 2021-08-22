@@ -120,7 +120,7 @@ type APIs interface {
 	// GetIPv4sFromEC2 returns the IPv4 addresses for a given ENI
 	GetIPv4sFromEC2(eniID string) (addrList []*ec2.NetworkInterfacePrivateIpAddress, err error)
 
-	// GetIPv4PrefixesFromEC2 returns the IPv4 addresses for a given ENI
+	// GetIPv4PrefixesFromEC2 returns the IPv4 prefixes for a given ENI
 	GetIPv4PrefixesFromEC2(eniID string) (addrList []*ec2.Ipv4PrefixSpecification, err error)
 
 	// GetIPv6PrefixesFromEC2 returns the IPv6 prefixes for a given ENI
@@ -334,7 +334,7 @@ func (ss *StringSet) Has(item string) bool {
 	return ss.data.Has(item)
 }
 
-type InstrumentedIMDS struct {
+type instrumentedIMDS struct {
 	EC2MetadataIface
 }
 
@@ -349,7 +349,7 @@ func awsReqStatus(err error) string {
 	return "" // Unknown HTTP status code
 }
 
-func (i InstrumentedIMDS) GetMetadataWithContext(ctx context.Context, p string) (string, error) {
+func (i instrumentedIMDS) GetMetadataWithContext(ctx context.Context, p string) (string, error) {
 	start := time.Now()
 	result, err := i.EC2MetadataIface.GetMetadataWithContext(ctx, p)
 	duration := msSince(start)
@@ -376,7 +376,7 @@ func New(useCustomNetworking, v4Enabled, v6Enabled bool) (*EC2InstanceMetadataCa
 	ec2Metadata := ec2metadata.New(sess)
 
 	cache := &EC2InstanceMetadataCache{}
-	cache.imds = TypedIMDS{InstrumentedIMDS{ec2Metadata}}
+	cache.imds = TypedIMDS{instrumentedIMDS{ec2Metadata}}
 	cache.clusterName = os.Getenv(clusterNameEnvVar)
 	cache.additionalENITags = loadAdditionalENITags()
 
@@ -1061,7 +1061,7 @@ func (cache *EC2InstanceMetadataCache) GetIPv4PrefixesFromEC2(eniID string) (add
 	return returnedENI.Ipv4Prefixes, nil
 }
 
-// GetIPv4PrefixesFromEC2 calls EC2 and returns a list of all addresses on the ENI
+// GetIPv6PrefixesFromEC2 calls EC2 and returns a list of all addresses on the ENI
 func (cache *EC2InstanceMetadataCache) GetIPv6PrefixesFromEC2(eniID string) (addrList []*ec2.Ipv6PrefixSpecification, err error) {
 	eniIds := make([]*string, 0)
 	eniIds = append(eniIds, aws.String(eniID))
@@ -1081,7 +1081,6 @@ func (cache *EC2InstanceMetadataCache) GetIPv6PrefixesFromEC2(eniID string) (add
 		return nil, errors.Wrap(err, "failed to describe network interface")
 	}
 
-	// Shouldn't happen, but let's be safe
 	if len(result.NetworkInterfaces) == 0 {
 		return nil, ErrNoNetworkInterfaces
 	}
@@ -1444,7 +1443,7 @@ func (cache *EC2InstanceMetadataCache) AllocIPv6Prefixes(eniID string) ([]*strin
 		return nil, errors.Wrap(err, "allocate IPv6 prefix: failed to allocate an IPv6 prefix address")
 	}
 	if output != nil {
-		log.Debugf("Allocated %d private IPv6 prefixes", len(output.AssignedIpv6Prefixes))
+		log.Debugf("Allocated %d private IPv6 prefix(es)", len(output.AssignedIpv6Prefixes))
 	}
 	return output.AssignedIpv6Prefixes, nil
 }
@@ -1470,8 +1469,8 @@ func (cache *EC2InstanceMetadataCache) waitForENIAndIPsAttached(eni string, want
 			if eni == returnedENI.ENIID {
 				// Check how many Secondary IPs or Prefixes have been attached
 				var eniIPCount int
-				log.Debugf("ENI ID: %v IP Addr: %s, Prefixes:- %v", returnedENI.ENIID,
-					returnedENI.IPv4Addresses, returnedENI.IPv4Prefixes)
+				log.Debugf("ENI ID: %v IP Addr: %s, IPv4Prefixes:- %v, IPv6Prefixes:- %v", returnedENI.ENIID,
+					returnedENI.IPv4Addresses, returnedENI.IPv4Prefixes, returnedENI.IPv6Prefixes)
 				if cache.enablePrefixDelegation {
 					eniIPCount = len(returnedENI.IPv4Prefixes)
 					if cache.v6Enabled {

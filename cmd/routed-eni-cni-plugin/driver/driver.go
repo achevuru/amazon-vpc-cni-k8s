@@ -133,7 +133,7 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 	}
 
 	if createVethContext.v6Addr != nil && createVethContext.v6Addr.IP.To16() != nil {
-		//Enable v6 support on Container's veth interface. We will set the same on Host side veth after we move it to host netns.
+		//Enable v6 support on Container's veth interface.
 		if err = createVethContext.procSys.Set(fmt.Sprintf("net/ipv6/conf/%s/disable_ipv6", createVethContext.contVethName), "0"); err != nil {
 			if !os.IsNotExist(err) {
 				return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on container veth interface")
@@ -143,7 +143,7 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 		//Enable v6 support on Container's lo interface inside the Pod networking namespace.
 		if err = createVethContext.procSys.Set(fmt.Sprintf("net/ipv6/conf/lo/disable_ipv6"), "0"); err != nil {
 			if !os.IsNotExist(err) {
-				return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on container veth interface")
+				return errors.Wrapf(err, "setupVeth network: failed to enable IPv6 on container's lo interface")
 			}
 		}
 
@@ -204,7 +204,7 @@ func (createVethContext *createVethPairContext) run(hostNS ns.NetNS) error {
 
 	// add static ARP entry for default gateway
 	// we are using routed mode on the host and container need this static ARP entry to resolve its default gateway.
-	//function will derive the Family from the IP address passed. (v4 or v6)
+	// IP address family is derived from the IP address passed to the function (v4 or v6)
 	neigh := &netlink.Neigh{
 		LinkIndex:    contVeth.Attrs().Index,
 		State:        netlink.NUD_PERMANENT,

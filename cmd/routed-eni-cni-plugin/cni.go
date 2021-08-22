@@ -173,7 +173,7 @@ func add(args *skel.CmdArgs, cniTypes typeswrapper.CNITYPES, grpcClient grpcwrap
 	var v4Addr, v6Addr, addr *net.IPNet
 	var addrFamily string
 
-	//We don't support dual stack mode currently so it has to be either v6 or v6 mode.
+	//We don't support dual stack mode currently so it has to be either v4 or v6 mode.
 	if r.IPv4Addr != "" {
 		v4Addr = &net.IPNet{
 			IP:   net.ParseIP(r.IPv4Addr),

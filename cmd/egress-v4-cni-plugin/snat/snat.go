@@ -42,6 +42,7 @@ func iptRules4(target, src net.IP, chain, comment string, useRandomFully bool) [
 	return rules
 }
 
+//Setup a rule to block egress traffic directed to 169.254.172.0/22 from the Pod
 func SetupRuleToBlockNodeLocalV4Access() error{
 	ipt, _ := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err := ipt.AppendUnique("filter", "OUTPUT", "-d", "169.254.172.0/22", "-m", "comment",
@@ -51,6 +52,7 @@ func SetupRuleToBlockNodeLocalV4Access() error{
 
 	return nil
 }
+
 // Snat4 SNATs IPv4 connections from `src` to `target`
 func Snat4(target, src net.IP, chain, comment string) error {
 	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
@@ -83,27 +85,6 @@ func Snat4(target, src net.IP, chain, comment string) error {
 		chain := rule[0]
 		if err := ipt.AppendUnique("nat", chain, rule[1:]...); err != nil {
 			return err
-		}
-	}
-
-	return nil
-}
-
-// Snat4Check checks to see if whatever snat4 did is still present.
-func Snat4Check(target, src net.IP, chain, comment string) error {
-	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
-	if err != nil {
-		return fmt.Errorf("failed to locate iptables: %v", err)
-	}
-
-	rules := iptRules4(target, src, chain, comment, ipt.HasRandomFully())
-
-	for _, rule := range rules {
-		chain := rule[0]
-		if exists, err := ipt.Exists("nat", chain, rule[1:]...); err != nil {
-			return err
-		} else if !exists {
-			return fmt.Errorf("expected rule is not present: %v", rule)
 		}
 	}
 

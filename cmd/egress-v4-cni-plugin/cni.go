@@ -30,6 +30,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/containernetworking/plugins/pkg/utils"
 	"github.com/vishvananda/netlink"
+	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 
 	"github.com/aws/amazon-vpc-cni-k8s/cmd/egress-v4-cni-plugin/snat"
 )
@@ -67,6 +68,12 @@ func loadConf(bytes []byte) (*NetConf, logger.Logger, error) {
 
 	if err := json.Unmarshal(bytes, conf); err != nil {
 		return nil, nil, err
+	}
+
+	if conf.RawPrevResult != nil {
+		if err := cniversion.ParsePrevResult(&conf.NetConf); err != nil {
+			return nil, nil, fmt.Errorf("could not parse prevResult: %v", err)
+		}
 	}
 
 	logConfig := logger.Configuration{
@@ -185,7 +192,12 @@ func setupContainerVeth(netns ns.NetNS, ifName string, mtu int, pr *current.Resu
 			}
 		}
 
-		//Block traffic to 169.254.172.0/22
+		//Disable IPv6 on this interface
+		_, err = sysctl.Sysctl("net/ipv6/conf/"+ifName+"/disable_ipv6", "1")
+		if err != nil {
+			return fmt.Errorf("failed to disable IPv6 for interface: %v", err)
+		}
+		//Block traffic directed to 169.254.172.0/22 from the Pod
 		err = snat.SetupRuleToBlockNodeLocalV4Access()
 		if err != nil {
 			return err
@@ -253,11 +265,20 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("failed to parse config: %v", err)
 	}
 
-	result := &current.Result{}
+	if netConf.PrevResult == nil {
+		return fmt.Errorf("must be called as a chained plugin")
+	}
 
-	log.Debugf("doing ADD: conf=%v; enabled=%s", netConf, netConf.Enabled)
+	result, err := current.GetResult(netConf.PrevResult)
+	if err != nil {
+		return err
+	}
 
-	//We only need this plugin to kick in if v6 is enabled
+	log.Debugf("Received an ADD request for: conf=%v; Plugin enabled=%s", netConf, netConf.Enabled)
+	//We will not be vending out this as a separate plugin by itself and it is only intended to be used as a
+	//chained plugin to VPC CNI in IPv6 mode. We only need this plugin to kick in if v6 is enabled in VPC CNI. So, the
+	//value of an env variable in VPC CNI determines whether this plugin should be enabled and this is an attempt to
+	//pass through the variable configured in VPC CNI.
 	if netConf.Enabled == "false" {
 		return types.PrintResult(result, netConf.CNIVersion)
 	}
@@ -307,9 +328,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-	//log.Printf("Set up host iface %q. Result: %v", hostInterface.Name, tmpResult)
 	log.Debugf("Node IP: %s", netConf.NodeIP)
-
 	if netConf.NodeIP != nil {
 		for _, ipc := range tmpResult.IPs {
 			if ipc.Version == "4" {
@@ -321,13 +340,12 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 	}
 
-	// Copy interfaces over to result, but not IPs.
-	result = &current.Result{
-		Interfaces: tmpResult.Interfaces,
-	}
+	//Copy interfaces over to result, but not IPs.
 	result.Interfaces = append(result.Interfaces, tmpResult.Interfaces...)
-
-	//log.Printf("Returning result: %v", result)
+	//Note: Useful for debug, will do away with the below log prior to release
+	for _,v := range result.IPs {
+		log.Debugf("Interface Name: %v; IP: %s", v.Interface, v.Address)
+	}
 
 	// Pass through the previous result
 	return types.PrintResult(result, netConf.CNIVersion)
@@ -357,8 +375,7 @@ func cmdDel(args *skel.CmdArgs) error {
 
 			// DelLinkByNameAddr function deletes an interface and returns IPs assigned to it but it
 			// excludes IPs that are not global unicast addresses (or) private IPs. Will not work for
-			// our scenario as we use 169.254.0.0/16 range for v4 IPs. So, we will do what is required.
-			//ipnets, err = ip.DelLinkByNameAddr(netConf.IfName)
+			// our scenario as we use 169.254.0.0/16 range for v4 IPs.
 
 			//Get the interface we want to delete
 			iface, err := netlink.LinkByName(netConf.IfName)

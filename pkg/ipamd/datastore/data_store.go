@@ -638,7 +638,10 @@ func (ds *DataStore) AddIPv6CidrToStore(eniID string, ipv6Cidr net.IPNet, isPref
 		AddressFamily: "6",
 	}
 
-	ds.total += defaultMaxIPv6addresses //curENI.IPv6Cidrs[strIPv6Cidr].Size() will end up with a huge number
+	//curENI.IPv6Cidrs[strIPv6Cidr].Size() will end up with a huge number. So, instead capping it to Max Pods ceiling on
+	//an EKS Node. TODO - Should we increase the default value further as VPC CNI can also be used in a Self Managed K8S
+	//cluster with no such upper bound?
+	ds.total += defaultMaxIPv6addresses
 	if isPrefix {
 		ds.allocatedPrefix++
 	}
@@ -806,25 +809,6 @@ func (ds *DataStore) unassignPodIPAddressUnsafe(addr *AddressInfo) {
 	// Prometheus gauge
 	assignedIPs.Set(float64(ds.assigned))
 }
-
-/*
-// It returns the assigned IPv4 address, device number
-func (ds *DataStore) assignPodIPv6AddressUnsafe(ipamKey IPAMKey, eni *ENI, addr *AddressInfo) (string, int) {
-	ds.log.Infof("AssignPodIPAddress: Assign IP %v to sandbox %s",
-		addr.Address, ipamKey)
-
-	if addr.Assigned() {
-		panic("addr already assigned")
-	}
-	addr.IPAMKey = ipamKey // This marks the addr as assigned
-
-	ds.assigned++
-	// Prometheus gauge
-	assignedIPs.Set(float64(ds.assigned))
-
-	return addr.Address, eni.DeviceNumber
-}
-*/
 
 // GetStats returns total number of IP addresses, number of assigned IP addresses and total prefixes
 func (ds *DataStore) GetStats(addressFamily string) (int, int, int) {
@@ -1143,9 +1127,8 @@ func (ds *DataStore) UnassignPodIPAddress(ipamKey IPAMKey) (e *ENI, ip string, d
 	if addr == nil {
 		ds.log.Warnf("UnassignPodIPAddress: Failed to find sandbox %s",
 			ipamKey)
-		return nil, "", 0, ErrUnknownPod
 		//Pod Not found. Nothing to do from IPAMD perspective.
-		//return nil, "", 0, nil
+		return nil, "", 0, ErrUnknownPod
 	}
 
 	ds.unassignPodIPAddressUnsafe(addr)

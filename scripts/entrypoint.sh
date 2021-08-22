@@ -119,13 +119,11 @@ wait_for_ipam() {
     done
 }
 
-
 #NodeIP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
 get_node_primary_v4_address() {
     while :
     do
         NODE_IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
-        str="Hi"
         if [[ "${NODE_IP}" != "" ]]; then
             return 0
         fi
