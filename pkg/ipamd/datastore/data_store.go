@@ -678,12 +678,14 @@ func (ds *DataStore) AssignPodIPv4Address(ipamKey IPAMKey, ipamMetadata IPAMMeta
 	}
 
 	for _, eni := range ds.eniPool {
-		for _, availableCidr := range eni.AvailableIPv4Cidrs {
+		for cidrKey, availableCidr := range eni.AvailableIPv4Cidrs {
+			ds.log.Infof("Found an available CIDR: %s ; isPrefix: %d", cidrKey, availableCidr.IsPrefix)
 			var addr *AddressInfo
 			var strPrivateIPv4 string
 			var err error
 
 			if (ds.isPDEnabled && availableCidr.IsPrefix) || (!ds.isPDEnabled && !availableCidr.IsPrefix) {
+				ds.log.Infof("Get an Free IPv4 address; PD Enabled %d, isPrefix: %d", ds.isPDEnabled, availableCidr.IsPrefix)
 				strPrivateIPv4, err = ds.getFreeIPv4AddrfromCidr(availableCidr)
 				if err != nil {
 					ds.log.Debugf("Unable to get IP address from CIDR: %v", err)

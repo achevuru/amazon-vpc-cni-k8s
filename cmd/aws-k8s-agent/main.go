@@ -15,15 +15,24 @@
 package main
 
 import (
-	"os"
-
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd"
+	"context"
+	cniNode "github.com/aws/amazon-vpc-cni-k8s/pkg/apis/v1alpha1"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/config"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/eventrecorder"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/version"
 	"github.com/aws/amazon-vpc-cni-k8s/utils"
 	metrics "github.com/aws/amazon-vpc-cni-k8s/utils/prometheusmetrics"
+	"os"
+
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/controllers"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
+	"github.com/aws/amazon-vpc-cni-k8s/pkg/version"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -40,6 +49,18 @@ const (
 
 func main() {
 	os.Exit(_main())
+}
+
+var (
+	scheme = runtime.NewScheme()
+	//setupLog = ctrl.Log.WithName("setup")
+)
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+
+	utilruntime.Must(cniNode.AddToScheme(scheme))
+	//+kubebuilder:scaffold:scheme
 }
 
 func _main() int {
@@ -68,14 +89,53 @@ func _main() int {
 		return 1
 	}
 
-	ipamContext, err := ipamd.New(k8sClient)
+	// Pool manager
+	//go ipamContext.StartNodeIPPoolManager()
+
+	//initLogger, _ := getLoggerWithLogLevel("info", "")
+
+	ctrlConfig, err := loadControllerConfig()
 	if err != nil {
-		log.Errorf("Initialization failure: %v", err)
-		return 1
+		//initLogger.Error("unable to load policy endpoint controller config")
+		log.Errorf("loadControllerConfig failure: %v", err)
+		os.Exit(1)
 	}
 
-	// Pool manager
-	go ipamContext.StartNodeIPPoolManager()
+	//ctrlLogger, err := getLoggerWithLogLevel(ctrlConfig.LogLevel, ctrlConfig.LogFile)
+	///if err != nil {
+	//initLogger.Error("unable to setup logger")
+	//os.Exit(1)
+	//}
+	//ctrl.SetLogger(ctrlLogger)
+	restCFG, err := config.BuildRestConfig(ctrlConfig.RuntimeConfig)
+	if err != nil {
+		//setupLog.Error(err, "unable to build REST config")
+		log.Errorf("BuildRestConfig failure: %v", err)
+		os.Exit(1)
+	}
+
+	runtimeOpts := config.BuildRuntimeOptions(ctrlConfig.RuntimeConfig, scheme)
+	mgr, err := ctrl.NewManager(restCFG, runtimeOpts)
+	if err != nil {
+		log.Errorf("BuildRuntimeOptions failure: %v", err)
+		//setupLog.Error(err, "unable to create controller manager")
+		os.Exit(1)
+	}
+
+	ctx := context.Background() //ctrl.SetupSignalHandler()
+	cniNodeReconciler, err := controllers.NewCNINodeReconciler(mgr.GetClient(), log, false)
+	//	ctrl.Log.WithName("controllers").WithName("cniNode"), false)
+	if err != nil {
+		log.Errorf("unable to setup controller: %v", err)
+		//setupLog.Error(err, "unable to setup controller", "controller", "PolicyEndpoints init failed")
+		os.Exit(1)
+	}
+
+	if err = cniNodeReconciler.SetupWithManager(ctx, mgr); err != nil {
+		log.Errorf("unable to create controller: %v", err)
+		//setupLog.Error(err, "unable to create controller", "controller", "PolicyEndpoints")
+		os.Exit(1)
+	}
 
 	if !utils.GetBoolAsStringEnvVar(envDisableMetrics, false) {
 		// Prometheus metrics
@@ -83,15 +143,45 @@ func _main() int {
 	}
 
 	// CNI introspection endpoints
-	if !utils.GetBoolAsStringEnvVar(envDisableIntrospection, false) {
-		go ipamContext.ServeIntrospection()
+	/*
+		if !utils.GetBoolAsStringEnvVar(envDisableIntrospection, false) {
+			go ipamContext.ServeIntrospection()
+		}
+	*/
+
+	//go ipamContext.RunRPCHandler(version.Version)
+
+	log.Info("starting manager")
+	if err = mgr.Start(ctx); err != nil {
+		log.Errorf("problem running manager", err)
+		os.Exit(1)
 	}
 
-	// Start the RPC listener
-	err = ipamContext.RunRPCHandler(version.Version)
-	if err != nil {
-		log.Errorf("Failed to set up gRPC handler: %v", err)
-		return 1
-	}
 	return 0
+}
+
+// getLoggerWithLogLevel returns logger with specific log level.
+/*
+func getLoggerWithLogLevel(logLevel string, logFilePath string) (logr.Logger, error) {
+	logConfig := logger.Configuration{
+		LogLevel:    logLevel,
+		LogLocation: logFilePath,
+	}
+	ctrlLogger := logger.New(&logConfig)
+	//return ctrlLogger, nil
+	return zapr.NewLogger(ctrlLogger), nil
+}
+*/
+
+// loadControllerConfig loads the controller configuration
+func loadControllerConfig() (config.ControllerConfig, error) {
+	controllerConfig := config.ControllerConfig{}
+	fs := pflag.NewFlagSet("", pflag.ExitOnError)
+	controllerConfig.BindFlags(fs)
+
+	if err := fs.Parse(os.Args); err != nil {
+		return controllerConfig, err
+	}
+
+	return controllerConfig, nil
 }

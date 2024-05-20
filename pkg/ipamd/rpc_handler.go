@@ -14,11 +14,9 @@
 package ipamd
 
 import (
-	"encoding/json"
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/pkg/errors"
@@ -32,10 +30,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd/datastore"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/networkutils"
 	"github.com/aws/amazon-vpc-cni-k8s/rpc"
 	"github.com/aws/amazon-vpc-cni-k8s/utils/prometheusmetrics"
-	k8serror "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
@@ -79,82 +75,6 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 	var deviceNumber, vlanID, trunkENILinkIndex int
 	var ipv4Addr, ipv6Addr, branchENIMAC, podENISubnetGW string
 	var err error
-	if s.ipamContext.enablePodENI {
-		// Check pod spec for Branch ENI
-		pod, err := s.ipamContext.GetPod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE)
-		if err != nil {
-			log.Warnf("Send AddNetworkReply: Failed to get pod: %v", err)
-			return &failureResponse, nil
-		}
-		limits := pod.Spec.Containers[0].Resources.Limits
-		for resName := range limits {
-			if strings.HasPrefix(string(resName), "vpc.amazonaws.com/pod-eni") {
-				// Check that we have a trunk
-				trunkENI := s.ipamContext.dataStore.GetTrunkENI()
-				if trunkENI == "" {
-					log.Warn("Send AddNetworkReply: No trunk ENI found, cannot add a pod ENI")
-					return &failureResponse, nil
-				}
-				trunkENILinkIndex, err = s.ipamContext.getTrunkLinkIndex()
-				if err != nil {
-					log.Warn("Send AddNetworkReply: No trunk ENI Link Index found, cannot add a pod ENI")
-					return &failureResponse, nil
-				}
-				val, branch := pod.Annotations["vpc.amazonaws.com/pod-eni"]
-				if branch {
-					// Parse JSON data
-					var podENIData []PodENIData
-					err := json.Unmarshal([]byte(val), &podENIData)
-					if err != nil || len(podENIData) < 1 {
-						log.Errorf("Failed to unmarshal PodENIData JSON: %v", err)
-						return &failureResponse, nil
-					}
-					firstENI := podENIData[0]
-					// Get pod IPv4 or IPv6 address based on mode
-					if s.ipamContext.enableIPv6 {
-						ipv6Addr = firstENI.IPV6Addr
-					} else {
-						ipv4Addr = firstENI.PrivateIP
-					}
-					branchENIMAC = firstENI.IfAddress
-					vlanID = firstENI.VlanID
-					log.Debugf("Pod vlandId: %d", vlanID)
-
-					if (ipv4Addr == "" && ipv6Addr == "") || branchENIMAC == "" || vlanID == 0 {
-						log.Errorf("Failed to parse pod-ENI annotation: %s", val)
-						return &failureResponse, nil
-					}
-					var subnetCIDR *net.IPNet
-					if s.ipamContext.enableIPv6 {
-						_, subnetCIDR, err = net.ParseCIDR(firstENI.SubnetV6CIDR)
-						if err != nil {
-							log.Errorf("Failed to parse V6 subnet CIDR: %s", firstENI.SubnetV6CIDR)
-							return &failureResponse, nil
-						}
-					} else {
-						_, subnetCIDR, err = net.ParseCIDR(firstENI.SubnetCIDR)
-						if err != nil {
-							log.Errorf("Failed to parse V4 subnet CIDR: %s", firstENI.SubnetCIDR)
-							return &failureResponse, nil
-						}
-					}
-					var gw net.IP
-					// For IPv6, the gateway is derived from the RA route on the primary ENI. The primary ENI is always in the same subnet as the trunk and branch ENI.
-					// For IPv4, the gateway is always the .1 address for the subnet CIDR.
-					if s.ipamContext.enableIPv6 {
-						gw = networkutils.GetIPv6Gateway()
-					} else {
-						gw = networkutils.GetIPv4Gateway(subnetCIDR)
-					}
-					podENISubnetGW = gw.String()
-					deviceNumber = -1 // Not needed for branch ENI, they depend on trunkENIDeviceIndex
-				} else {
-					log.Infof("Send AddNetworkReply: failed to get Branch ENI resource")
-					return &failureResponse, nil
-				}
-			}
-		}
-	}
 
 	if s.ipamContext.enableIPv4 && ipv4Addr == "" ||
 		s.ipamContext.enableIPv6 && ipv6Addr == "" {
@@ -177,10 +97,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 	var pbVPCV4cidrs, pbVPCV6cidrs []string
 	var useExternalSNAT bool
 	if s.ipamContext.enableIPv4 && ipv4Addr != "" {
-		pbVPCV4cidrs, err = s.ipamContext.awsClient.GetVPCIPv4CIDRs()
-		if err != nil {
-			return nil, err
-		}
+		pbVPCV4cidrs = s.ipamContext.v4VPCCIDRs
 		for _, cidr := range pbVPCV4cidrs {
 			log.Debugf("VPC CIDR %s", cidr)
 		}
@@ -192,29 +109,28 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 			}
 		}
 	} else if s.ipamContext.enableIPv6 && ipv6Addr != "" {
-		pbVPCV6cidrs, err = s.ipamContext.awsClient.GetVPCIPv6CIDRs()
-		if err != nil {
-			return nil, err
-		}
+		pbVPCV6cidrs = s.ipamContext.v6VPCCIDRs
 		for _, cidr := range pbVPCV6cidrs {
 			log.Debugf("VPC V6 CIDR %s", cidr)
 		}
 	}
 
-	if s.ipamContext.enablePodIPAnnotation {
-		// On ADD, we pass empty string as there is no IP being released
-		if ipv4Addr != "" {
-			err = s.ipamContext.AnnotatePod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE, vpccniPodIPKey, ipv4Addr, "")
-			if err != nil {
-				log.Errorf("Failed to add the pod annotation: %v", err)
-			}
-		} else if ipv6Addr != "" {
-			err = s.ipamContext.AnnotatePod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE, vpccniPodIPKey, ipv6Addr, "")
-			if err != nil {
-				log.Errorf("Failed to add the pod annotation: %v", err)
+	/*
+		if s.ipamContext.enablePodIPAnnotation {
+			// On ADD, we pass empty string as there is no IP being released
+			if ipv4Addr != "" {
+				err = s.ipamContext.AnnotatePod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE, vpccniPodIPKey, ipv4Addr, "")
+				if err != nil {
+					log.Errorf("Failed to add the pod annotation: %v", err)
+				}
+			} else if ipv6Addr != "" {
+				err = s.ipamContext.AnnotatePod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE, vpccniPodIPKey, ipv6Addr, "")
+				if err != nil {
+					log.Errorf("Failed to add the pod annotation: %v", err)
+				}
 			}
 		}
-	}
+	*/
 	resp := rpc.AddNetworkReply{
 		Success:           err == nil,
 		IPv4Addr:          ipv4Addr,
@@ -245,7 +161,7 @@ func (s *server) DelNetwork(ctx context.Context, in *rpc.DelNetworkRequest) (*rp
 	log.Infof("Received DelNetwork for Sandbox %s", in.ContainerID)
 	log.Debugf("DelNetworkRequest: %s", in)
 	prometheusmetrics.DelIPCnt.With(prometheus.Labels{"reason": in.Reason}).Inc()
-	var ipv4Addr, ipv6Addr, cidrStr string
+	var ipv4Addr, ipv6Addr string
 
 	// Do this early, but after logging trace
 	if err := s.validateVersion(in.ClientVersion); err != nil {
@@ -258,62 +174,49 @@ func (s *server) DelNetwork(ctx context.Context, in *rpc.DelNetworkRequest) (*rp
 		IfName:      in.IfName,
 		NetworkName: in.NetworkName,
 	}
-	eni, ip, deviceNumber, err := s.ipamContext.dataStore.UnassignPodIPAddress(ipamKey)
+	_, ip, deviceNumber, err := s.ipamContext.dataStore.UnassignPodIPAddress(ipamKey)
 	if s.ipamContext.enableIPv4 {
 		ipv4Addr = ip
-		cidr := net.IPNet{IP: net.ParseIP(ip), Mask: net.IPv4Mask(255, 255, 255, 255)}
-		cidrStr = cidr.String()
 	} else if s.ipamContext.enableIPv6 {
 		ipv6Addr = ip
 	}
 
-	if s.ipamContext.enableIPv4 && eni != nil {
-		//cidrStr will be pod IP i.e, IP/32 for v4 (or) IP/128 for v6.
-		// Case 1: PD is enabled but IP/32 key in AvailableIPv4Cidrs[cidrStr] exists, this means it is a secondary IP. Added IsPrefix check just for sanity.
-		// So this IP should be released immediately.
-		// Case 2: PD is disabled then IP/32 key in AvailableIPv4Cidrs[cidrStr] will not exists since key to AvailableIPv4Cidrs will be either /28 prefix or /32
-		// secondary IP. Hence now see if we need free up a prefix is no other pods are using it.
-		if s.ipamContext.enablePrefixDelegation && eni.AvailableIPv4Cidrs[cidrStr] != nil && eni.AvailableIPv4Cidrs[cidrStr].IsPrefix == false {
-			log.Debugf("IP belongs to secondary pool with PD enabled so free IP from EC2")
-			s.ipamContext.tryUnassignIPFromENI(eni.ID)
-		} else if !s.ipamContext.enablePrefixDelegation && eni.AvailableIPv4Cidrs[cidrStr] == nil {
-			log.Debugf("IP belongs to prefix pool with PD disabled so try free prefix from EC2")
-			s.ipamContext.tryUnassignPrefixFromENI(eni.ID)
-		}
-	}
-
-	if err == datastore.ErrUnknownPod && s.ipamContext.enablePodENI {
-		pod, err := s.ipamContext.GetPod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE)
-		if err != nil {
-			if k8serror.IsNotFound(err) {
-				log.Warn("Send DelNetworkReply: pod not found")
-				return &rpc.DelNetworkReply{Success: true}, nil
+	/*
+		if err == datastore.ErrUnknownPod && s.ipamContext.enablePodENI {
+			pod, err := s.ipamContext.GetPod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE)
+			if err != nil {
+				if k8serror.IsNotFound(err) {
+					log.Warn("Send DelNetworkReply: pod not found")
+					return &rpc.DelNetworkReply{Success: true}, nil
+				}
+				log.Warnf("Send DelNetworkReply: Failed to get pod spec: %v", err)
+				return &rpc.DelNetworkReply{Success: false}, err
 			}
-			log.Warnf("Send DelNetworkReply: Failed to get pod spec: %v", err)
-			return &rpc.DelNetworkReply{Success: false}, err
-		}
-		val, branch := pod.Annotations["vpc.amazonaws.com/pod-eni"]
-		if branch {
-			// Parse JSON data
-			var podENIData []PodENIData
-			err := json.Unmarshal([]byte(val), &podENIData)
-			if err != nil || len(podENIData) < 1 {
-				log.Errorf("Failed to unmarshal PodENIData JSON: %v", err)
+			val, branch := pod.Annotations["vpc.amazonaws.com/pod-eni"]
+			if branch {
+				// Parse JSON data
+				var podENIData []PodENIData
+				err := json.Unmarshal([]byte(val), &podENIData)
+				if err != nil || len(podENIData) < 1 {
+					log.Errorf("Failed to unmarshal PodENIData JSON: %v", err)
+				}
+				return &rpc.DelNetworkReply{
+					Success:   true,
+					PodVlanId: int32(podENIData[0].VlanID),
+					IPv4Addr:  podENIData[0].PrivateIP}, err
 			}
-			return &rpc.DelNetworkReply{
-				Success:   true,
-				PodVlanId: int32(podENIData[0].VlanID),
-				IPv4Addr:  podENIData[0].PrivateIP}, err
 		}
-	}
+	*/
 
-	if s.ipamContext.enablePodIPAnnotation {
-		// On DEL, we pass IP being released
-		err = s.ipamContext.AnnotatePod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE, vpccniPodIPKey, "", ip)
-		if err != nil {
-			log.Errorf("Failed to delete the pod annotation: %v", err)
+	/*
+		if s.ipamContext.enablePodIPAnnotation {
+			// On DEL, we pass IP being released
+			err = s.ipamContext.AnnotatePod(in.K8S_POD_NAME, in.K8S_POD_NAMESPACE, vpccniPodIPKey, "", ip)
+			if err != nil {
+				log.Errorf("Failed to delete the pod annotation: %v", err)
+			}
 		}
-	}
+	*/
 
 	log.Infof("Send DelNetworkReply: IPv4Addr: %s, IPv6Addr: %s, DeviceNumber: %d, err: %v", ipv4Addr, ipv6Addr, deviceNumber, err)
 

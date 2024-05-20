@@ -21,8 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/eniconfig"
-	"github.com/aws/amazon-vpc-cni-k8s/pkg/k8sapi"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/networkutils"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/retry"
 )
@@ -76,7 +74,6 @@ func (c *IPAMContext) ServeIntrospection() {
 func (c *IPAMContext) setupIntrospectionServer() *http.Server {
 	serverFunctions := map[string]func(w http.ResponseWriter, r *http.Request){
 		"/v1/enis":                      eniV1RequestHandler(c),
-		"/v1/eni-configs":               eniConfigRequestHandler(c),
 		"/v1/networkutils-env-settings": networkEnvV1RequestHandler(),
 		"/v1/ipamd-env-settings":        ipamdEnvV1RequestHandler(),
 	}
@@ -133,31 +130,6 @@ func eniV1RequestHandler(ipam *IPAMContext) func(http.ResponseWriter, *http.Requ
 	}
 }
 
-func eniConfigRequestHandler(ipam *IPAMContext) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		node, err := k8sapi.GetNode(ctx, ipam.k8sClient)
-		if err != nil {
-			log.Errorf("Failed to get host node: %v", err)
-			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-			return
-		}
-		myENIConfig, err := eniconfig.GetNodeSpecificENIConfigName(node)
-		if err != nil {
-			log.Errorf("Failed to get ENI config: %v", err)
-			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-			return
-		}
-		responseJSON, err := json.Marshal(myENIConfig)
-		if err != nil {
-			log.Errorf("Failed to marshal ENI config: %v", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-		logErr(w.Write(responseJSON))
-	}
-}
-
 func networkEnvV1RequestHandler() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		responseJSON, err := json.Marshal(networkutils.GetConfigForDebug())
@@ -171,15 +143,18 @@ func networkEnvV1RequestHandler() func(http.ResponseWriter, *http.Request) {
 }
 
 func ipamdEnvV1RequestHandler() func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		responseJSON, err := json.Marshal(GetConfigForDebug())
-		if err != nil {
-			log.Errorf("Failed to marshal ipamd env var data: %v", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
+	/*
+		return func(w http.ResponseWriter, r *http.Request) {
+			responseJSON, err := json.Marshal(GetConfigForDebug())
+			if err != nil {
+				log.Errorf("Failed to marshal ipamd env var data: %v", err)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
+			logErr(w.Write(responseJSON))
 		}
-		logErr(w.Write(responseJSON))
-	}
+	*/
+	return nil
 }
 
 func logErr(_ int, err error) {
