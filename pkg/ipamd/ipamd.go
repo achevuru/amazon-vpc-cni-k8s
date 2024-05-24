@@ -232,6 +232,12 @@ type ENIMetadata struct {
 
 	// IPv6 Prefixes allocated for the network interface
 	IPv6Prefixes []string
+
+	//CoolDown CIDRs
+	CoolDownHostCIDRs []string
+
+	//CoolDownPrefix CIDRs
+	CoolDownPrefixCIDRs []string
 }
 
 // ReconcileCooldownCache keep track of recently freed CIDRs to avoid reading stale EC2 metadata
@@ -361,14 +367,15 @@ func (c *IPAMContext) nodeInit(vpcV4CIDRs []string, primaryENIMac, primaryIP, pr
 		return err
 	}
 
-	/*
-		if err = c.configureIPRulesForPods(); err != nil {
-			return err
-		}
-		// Spawning updateCIDRsRulesOnChange go-routine
-		go wait.Forever(func() {
-			vpcV4CIDRs = c.updateCIDRsRulesOnChange(vpcV4CIDRs)
-		}, 30*time.Second)
+	if err = c.configureIPRulesForPods(); err != nil {
+		return err
+	}
+
+	/* TODO
+	// Spawning updateCIDRsRulesOnChange go-routine
+	go wait.Forever(func() {
+		vpcV4CIDRs = c.updateCIDRsRulesOnChange(vpcV4CIDRs)
+	}, 30*time.Second)
 
 	*/
 
@@ -384,8 +391,6 @@ func (c *IPAMContext) configureIPRulesForPods() error {
 	}
 
 	for _, info := range c.dataStore.AllocatedIPs() {
-		// TODO(gus): This should really be done via CNI CHECK calls, rather than in ipam (requires upstream k8s changes).
-
 		// Update ip rules in case there is a change in VPC CIDRs, AWS_VPC_K8S_CNI_EXTERNALSNAT setting
 		srcIPNet := net.IPNet{IP: net.ParseIP(info.IP), Mask: net.IPv4Mask(255, 255, 255, 255)}
 
@@ -395,15 +400,17 @@ func (c *IPAMContext) configureIPRulesForPods() error {
 		}
 	}
 
+	// TODO - Should we support this for Tachyon
 	// Program IP rules for external service CIDRs and cleanup stale rules.
 	// Note that we can reuse rule list despite it being modified by UpdateRuleListBySrc, as the
 	// modifications touched rules that this function ignores.
-	extServiceCIDRs := c.networkClient.GetExternalServiceCIDRs()
-	err = c.networkClient.UpdateExternalServiceIpRules(rules, extServiceCIDRs)
-	if err != nil {
-		log.Warnf("UpdateExternalServiceIpRules in nodeInit() failed")
-	}
-
+	/*
+		extServiceCIDRs := c.networkClient.GetExternalServiceCIDRs()
+		err = c.networkClient.UpdateExternalServiceIpRules(rules, extServiceCIDRs)
+		if err != nil {
+			log.Warnf("UpdateExternalServiceIpRules in nodeInit() failed")
+		}
+	*/
 	return nil
 }
 
@@ -501,7 +508,7 @@ func (c *IPAMContext) addENIsecondaryIPsToDataStore(PrivateIpAddrs []string, eni
 			ipamdErrInc("addENIsecondaryIPsToDataStoreFailed")
 		}
 	}
-	//c.logPoolStats(c.dataStore.GetIPStats(ipV4AddrFamily))
+	c.logPoolStats(c.dataStore.GetIPStats(ipV4AddrFamily))
 
 }
 
@@ -641,6 +648,37 @@ func (c *IPAMContext) VerifyAndAddPrefixesToDatastore(eni string, attachedENIPre
 		prometheusmetrics.ReconcileCnt.With(prometheus.Labels{"fn": "eniDataStorePoolReconcileAdd"}).Inc()
 	}
 	return seenIPs
+}
+
+func (c *IPAMContext) VerifyAndDeletePrefixesFromDatastore(eni string, coolDownHostCIDRs, coolDownPrefixCIDRs []string) error {
+
+	var err error
+	freeIPs := c.dataStore.FreeableIPs(eni)
+	freePrefixes := c.dataStore.FreeablePrefixes(eni)
+
+	//Delete the IPs under Cool Down list from the datastore
+	for _, HostCidr := range coolDownHostCIDRs {
+		if _, ok := freeIPs[HostCidr]; !ok {
+			_, ipNet, _ := net.ParseCIDR(HostCidr)
+			err = c.dataStore.DelIPv4CidrFromStore(eni, *ipNet, false)
+			if err != nil {
+				log.Errorf("Error deleting the IP %s from datastore for ENI: %s", HostCidr, eni)
+			}
+		}
+	}
+
+	//Delete the Prefixes under Cool Down list from the datastore
+	for _, PrefixCidr := range coolDownPrefixCIDRs {
+		if _, ok := freePrefixes[PrefixCidr]; !ok {
+			_, ipNet, _ := net.ParseCIDR(PrefixCidr)
+			err = c.dataStore.DelIPv4CidrFromStore(eni, *ipNet, false)
+			if err != nil {
+				log.Errorf("Error deleting the Prefix %s from datastore for ENI: %s", PrefixCidr, eni)
+			}
+		}
+	}
+
+	return nil
 }
 
 func parseBoolEnvVar(envVariableName string, defaultVal bool) bool {

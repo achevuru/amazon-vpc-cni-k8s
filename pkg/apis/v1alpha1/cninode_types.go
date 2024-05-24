@@ -20,12 +20,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/awslabs/operatorpkg/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"time"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 type CIDR string
+
+type CooldownCIDRs struct {
+	CIDRs     []CIDR
+	StartedAt time.Time
+}
 
 type NetworkInterface struct {
 	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
@@ -40,8 +46,12 @@ type NetworkInterface struct {
 	DeviceIndex int32 `json:"deviceIndex"`
 	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
 	PrimaryCIDR CIDR `json:"primaryCIDR"`
+	// +kubebuilder:validation:MinLength:=1
+	// +kubebuilder:validation:Type:=string
+	SubnetCIDR CIDR `json:"subnetCIDR"`
 	// +kubebuilder:validation:XValidation:message="must not be empty",rule="self.size() != 0"
-	CIDRs []CIDR `json:"cidrs"`
+	CIDRs         []CIDR `json:"cidrs"`
+	CoolDownCIDRs []CooldownCIDRs
 }
 
 // CNINodeSpec defines the desired state of CNINode

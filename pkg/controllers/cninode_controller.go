@@ -198,30 +198,44 @@ func (c *CNINodeReconciler) deriveENIInfo(ctx context.Context, cniNode *cniNode.
 	var localNetworkInterfaces []ipamd.ENIMetadata
 	for _, networkInterfaceInfo := range cniNode.Status.NetworkInterfaces {
 		c.log.Infof("Deriving Network Interface info for ID: %s", networkInterfaceInfo.ID)
-		var eniHostCIDRs []string
-		var eniPrefixCIDRs []string
+		var eniHostCIDRs, eniPrefixCIDRs, CoolDownHostCIDRs, CoolDownPrefixCIDRs []string
 		for _, Cidr := range networkInterfaceInfo.CIDRs {
 			c.log.Infof("IP CIDR: %s", string(Cidr))
 			ipAddress, isPrefix := c.IsNonHostCIDR(string(Cidr))
 			if isPrefix {
 				eniPrefixCIDRs = append(eniPrefixCIDRs, string(Cidr))
 			} else {
-				eniHostCIDRs = append(eniHostCIDRs, string(ipAddress))
+				eniHostCIDRs = append(eniHostCIDRs, ipAddress)
 			}
 		}
-		c.log.Infof("Total number of Host CIDRs attached: %d", len(eniHostCIDRs))
-		c.log.Infof("Total number of Prefix CIDRs attached: %d", len(eniPrefixCIDRs))
+
+		for _, CoolDownCIDR := range networkInterfaceInfo.CoolDownCIDRs {
+			for _, Cidr := range CoolDownCIDR.CIDRs {
+				c.log.Infof("CoolDown CIDR: %s", string(Cidr))
+				ipAddress, isPrefix := c.IsNonHostCIDR(string(Cidr))
+				if isPrefix {
+					CoolDownPrefixCIDRs = append(CoolDownPrefixCIDRs, string(Cidr))
+				} else {
+					CoolDownHostCIDRs = append(CoolDownHostCIDRs, ipAddress)
+				}
+			}
+		}
+		c.log.Infof("Total number of Host CIDRs attached: %d; Prefix CIDRs: %d", len(eniHostCIDRs), len(eniPrefixCIDRs))
+		c.log.Infof("Total number of Host Cool Down CIDRs: %d; "+
+			"Prefix CIDRs: %d", len(CoolDownHostCIDRs), len(CoolDownPrefixCIDRs))
 		localNetworkInterfaces = append(localNetworkInterfaces,
 			ipamd.ENIMetadata{
-				ENIID:            networkInterfaceInfo.ID,
-				MAC:              c.primaryMAC,
-				PrimaryIP:        string(networkInterfaceInfo.PrimaryCIDR),
-				DeviceNumber:     networkInterfaceInfo.DeviceIndex,
-				NetworkCardIndex: networkInterfaceInfo.NetworkCardIndex,
-				SubnetIPv4CIDR:   c.v4VPCCIDRs[0],
-				SubnetIPv6CIDR:   c.v6VPCCIDRs[0],
-				IPv4Addresses:    eniHostCIDRs,
-				IPv4Prefixes:     eniPrefixCIDRs,
+				ENIID:               networkInterfaceInfo.ID,
+				MAC:                 c.primaryMAC,
+				PrimaryIP:           string(networkInterfaceInfo.PrimaryCIDR),
+				DeviceNumber:        networkInterfaceInfo.DeviceIndex,
+				NetworkCardIndex:    networkInterfaceInfo.NetworkCardIndex,
+				SubnetIPv4CIDR:      string(networkInterfaceInfo.SubnetCIDR),
+				SubnetIPv6CIDR:      string(networkInterfaceInfo.SubnetCIDR),
+				IPv4Addresses:       eniHostCIDRs,
+				IPv4Prefixes:        eniPrefixCIDRs,
+				CoolDownHostCIDRs:   CoolDownHostCIDRs,
+				CoolDownPrefixCIDRs: CoolDownPrefixCIDRs,
 			})
 	}
 
@@ -234,6 +248,9 @@ func (c *CNINodeReconciler) deriveENIInfo(ctx context.Context, cniNode *cniNode.
 			if err != nil {
 				c.log.Errorf("failed configuring ENI: %s", eniMetadata.ENIID)
 			}
+			//Purge the CIDRs in cool down list from the datastore
+			err = c.ipamContext.VerifyAndDeletePrefixesFromDatastore(eniMetadata.ENIID, eniMetadata.CoolDownHostCIDRs,
+				eniMetadata.CoolDownPrefixCIDRs)
 		}
 	}
 

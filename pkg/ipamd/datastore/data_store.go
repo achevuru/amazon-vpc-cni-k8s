@@ -1149,7 +1149,7 @@ func (ds *DataStore) AllocatedIPs() []PodIPInfo {
 
 // FreeableIPs returns a list of unused and potentially freeable IPs.
 // Note result may already be stale by the time you look at it.
-func (ds *DataStore) FreeableIPs(eniID string) []net.IPNet {
+func (ds *DataStore) FreeableIPs(eniID string) map[string]bool {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
 
@@ -1159,19 +1159,19 @@ func (ds *DataStore) FreeableIPs(eniID string) []net.IPNet {
 		return nil
 	}
 
-	freeable := make([]net.IPNet, 0, len(eni.AvailableIPv4Cidrs))
+	//freeable := make([]net.IPNet, 0, len(eni.AvailableIPv4Cidrs))
+	freeable := make(map[string]bool)
 	for _, assignedaddr := range eni.AvailableIPv4Cidrs {
 		if !assignedaddr.IsPrefix && assignedaddr.AssignedIPAddressesInCidr() == 0 {
-			freeable = append(freeable, assignedaddr.Cidr)
+			freeable[assignedaddr.Cidr.String()] = true
 		}
 	}
-
 	return freeable
 }
 
 // FreeablePrefixes returns a list of unused and potentially freeable IPs.
 // Note result may already be stale by the time you look at it.
-func (ds *DataStore) FreeablePrefixes(eniID string) []net.IPNet {
+func (ds *DataStore) FreeablePrefixes(eniID string) map[string]bool {
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
 
@@ -1181,10 +1181,11 @@ func (ds *DataStore) FreeablePrefixes(eniID string) []net.IPNet {
 		return nil
 	}
 
-	freeable := make([]net.IPNet, 0, len(eni.AvailableIPv4Cidrs))
+	//freeable := make([]net.IPNet, 0, len(eni.AvailableIPv4Cidrs))
+	freeable := make(map[string]bool)
 	for _, assignedaddr := range eni.AvailableIPv4Cidrs {
 		if assignedaddr.IsPrefix && assignedaddr.AssignedIPAddressesInCidr() == 0 {
-			freeable = append(freeable, assignedaddr.Cidr)
+			freeable[assignedaddr.Cidr.String()] = true
 		}
 	}
 	return freeable
