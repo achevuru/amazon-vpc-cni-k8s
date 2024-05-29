@@ -15,11 +15,8 @@ package ipamd
 
 import (
 	"net"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,7 +24,6 @@ import (
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd/datastore"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/networkutils"
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/utils/logger"
-	"github.com/aws/amazon-vpc-cni-k8s/utils"
 	"github.com/aws/amazon-vpc-cni-k8s/utils/prometheusmetrics"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,136 +34,20 @@ import (
 // the minimum threshold and frees them back when the pool size goes above max threshold.
 
 const (
-	ipPoolMonitorInterval       = 5 * time.Second
-	maxRetryCheckENI            = 5
-	eniAttachTime               = 10 * time.Second
-	nodeIPPoolReconcileInterval = 60 * time.Second
-	decreaseIPPoolInterval      = 30 * time.Second
-
-	// ipReconcileCooldown is the amount of time that an IP address must wait until it can be added to the data store
-	// during reconciliation after being discovered on the EC2 instance metadata.
-	ipReconcileCooldown = 60 * time.Second
-
-	// This environment variable is used to specify the desired number of free IPs always available in the "warm pool".
-	// When it is not set, ipamd defaults to use all available IPs per ENI for that instance type.
-	// For example, for a m4.4xlarge node,
-	//     If WARM_IP_TARGET is set to 1, and there are 9 pods running on the node, ipamd will try
-	//     to make the "warm pool" have 10 IP addresses with 9 being assigned to pods and 1 free IP.
-	//
-	//     If "WARM_IP_TARGET is not set, it will default to 30 (which the maximum number of IPs per ENI).
-	//     If there are 9 pods running on the node, ipamd will try to make the "warm pool" have 39 IPs with 9 being
-	//     assigned to pods and 30 free IPs.
-	envWarmIPTarget = "WARM_IP_TARGET"
-	noWarmIPTarget  = 0
-
-	// This environment variable is used to specify the desired minimum number of total IPs.
-	// When it is not set, ipamd defaults to 0.
-	// For example, for a m4.4xlarge node,
-	//     If WARM_IP_TARGET is set to 1 and MINIMUM_IP_TARGET is set to 12, and there are 9 pods running on the node,
-	//     ipamd will make the "warm pool" have 12 IP addresses with 9 being assigned to pods and 3 free IPs.
-	//
-	//     If "MINIMUM_IP_TARGET is not set, it will default to 0, which causes WARM_IP_TARGET settings to be the
-	//	   only settings considered.
-	envMinimumIPTarget = "MINIMUM_IP_TARGET"
-	noMinimumIPTarget  = 0
-
-	// This environment is used to specify the desired number of free ENIs along with all of its IP addresses
-	// always available in "warm pool".
-	// When it is not set, it is default to 1.
-	//
-	// when "WARM_IP_TARGET" is defined, ipamd will use behavior defined for "WARM_IP_TARGET".
-	//
-	// For example, for a m4.4xlarge node
-	//     If WARM_ENI_TARGET is set to 2, and there are 9 pods running on the node, ipamd will try to
-	//     make the "warm pool" to have 2 extra ENIs and its IP addresses, in other words, 90 IP addresses
-	//     with 9 IPs assigned to pods and 81 free IPs.
-	//
-	//     If "WARM_ENI_TARGET" is not set, it defaults to 1, so if there are 9 pods running on the node,
-	//     ipamd will try to make the "warm pool" have 1 extra ENI, in other words, 60 IPs with 9 already
-	//     being assigned to pods and 51 free IPs.
-	envWarmENITarget     = "WARM_ENI_TARGET"
-	defaultWarmENITarget = 1
-
-	// This environment variable is used to specify the maximum number of ENIs that will be allocated.
-	// When it is not set or less than 1, the default is to use the maximum available for the instance type.
-	//
-	// The maximum number of ENIs is in any case limited to the amount allowed for the instance type.
-	envMaxENI     = "MAX_ENI"
-	defaultMaxENI = -1
-
-	// This environment is used to specify whether Pods need to use a security group and subnet defined in an ENIConfig CRD.
-	// When it is NOT set or set to false, ipamd will use primary interface security group and subnet for Pod network.
-	envCustomNetworkCfg = "AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG"
-
-	// This environment variable specifies whether IPAMD should allocate or deallocate ENIs on a non-schedulable node (default false).
-	envManageENIsNonSchedulable = "AWS_MANAGE_ENIS_NON_SCHEDULABLE"
-
-	// This environment is used to specify whether we should use enhanced subnet selection or not when creating ENIs (default true).
-	envSubnetDiscovery = "ENABLE_SUBNET_DISCOVERY"
-
-	// eniNoManageTagKey is the tag that may be set on an ENI to indicate ipamd
-	// should not manage it in any form.
-	eniNoManageTagKey = "node.k8s.amazonaws.com/no_manage"
-
-	// disableENIProvisioning is used to specify that ENIs do not need to be synced during initializing a pod.
-	envDisableENIProvisioning = "DISABLE_NETWORK_RESOURCE_PROVISIONING"
-
-	// disableLeakedENICleanup is used to specify that the task checking and cleaning up leaked ENIs should not be run.
-	envDisableLeakedENICleanup = "DISABLE_LEAKED_ENI_CLEANUP"
-
-	// Specify where ipam should persist its current IP<->container allocations.
-	envBackingStorePath     = "AWS_VPC_K8S_CNI_BACKING_STORE"
-	defaultBackingStorePath = "/var/run/aws-node/ipam.json"
-
-	// envEnablePodENI is used to attach a Trunk ENI to every node. Required in order to give Branch ENIs to pods.
-	envEnablePodENI = "ENABLE_POD_ENI"
-
 	// envNodeName will be used to store Node name
 	envNodeName = "MY_NODE_NAME"
 
-	//envEnableIpv4PrefixDelegation is used to allocate /28 prefix instead of secondary IP for an ENI.
-	envEnableIpv4PrefixDelegation = "ENABLE_PREFIX_DELEGATION"
-
-	//envWarmPrefixTarget is used to keep a /28 prefix in warm pool.
-	envWarmPrefixTarget     = "WARM_PREFIX_TARGET"
-	defaultWarmPrefixTarget = 0
-
-	//envEnableIPv4 - Env variable to enable/disable IPv4 mode
-	envEnableIPv4 = "ENABLE_IPv4"
-
-	//envEnableIPv6 - Env variable to enable/disable IPv6 mode
-	envEnableIPv6 = "ENABLE_IPv6"
-
 	ipV4AddrFamily = "4"
 	ipV6AddrFamily = "6"
-
-	// insufficientCidrErrorCooldown is the amount of time reconciler will wait before trying to fetch
-	// more IPs/prefixes for an ENI. With InsufficientCidr we know the subnet doesn't have enough IPs so
-	// instead of retrying every 5s which would lead to increase in EC2 AllocIPAddress calls, we wait for
-	// 120 seconds for a retry.
-	insufficientCidrErrorCooldown = 120 * time.Second
-
-	// envManageUntaggedENI is used to determine if untagged ENIs should be managed or unmanaged
-	envManageUntaggedENI = "MANAGE_UNTAGGED_ENI"
-
-	eniNodeTagKey = "node.k8s.amazonaws.com/instance_id"
-
-	// envAnnotatePodIP is used to annotate[vpc.amazonaws.com/pod-ips] pod's with IPs
-	// Ref : https://github.com/projectcalico/calico/issues/3530
-	// not present; in which case we fall back to the k8s podIP
-	// Present and set to an IP; in which case we use it
-	// Present and set to the empty string, which we use to mean "CNI DEL had occurred; networking has been removed from this pod"
-	// The empty string one helps close a trace at pod shutdown where it looks like the pod still has its IP when the IP has been released
-	envAnnotatePodIP = "ANNOTATE_POD_IP"
-
-	// aws error codes for insufficient IP address scenario
-	INSUFFICIENT_CIDR_BLOCKS    = "InsufficientCidrBlocks"
-	INSUFFICIENT_FREE_IP_SUBNET = "InsufficientFreeAddressesInSubnet"
 
 	// envEnableNetworkPolicy is used to enable IPAMD/CNI to send pod create events to network policy agent.
 	envNetworkPolicyMode     = "NETWORK_POLICY_ENFORCING_MODE"
 	defaultNetworkPolicyMode = "standard"
 	hostMask                 = "/32"
+
+	// ipReconcileCooldown is the amount of time that an IP address must wait until it can be added to the data store
+	// during reconciliation after being discovered on the EC2 instance metadata.
+	ipReconcileCooldown = 60 * time.Second
 )
 
 var log = logger.Get()
@@ -186,9 +66,7 @@ type IPAMContext struct {
 
 	myNodeName            string
 	primaryIP             map[string]string // primaryIP is a map from ENI ID to primary IP of that ENI
-	terminating           int32             // Flag to warn that the pod is about to shut down.
 	enablePodIPAnnotation bool
-	maxPods               int // maximum number of pods that can be scheduled on the node
 	networkPolicyMode     string
 	v4VPCCIDRs            []string
 	v6VPCCIDRs            []string
@@ -346,20 +224,12 @@ func (c *IPAMContext) nodeInit(vpcV4CIDRs []string, primaryENIMac, primaryIP, pr
 				break
 			}
 
-			if retry > maxRetryCheckENI {
-				log.Warnf("Reached max retry: Unable to discover attached IPs for ENI from metadata service (attempted %d/%d): %v", retry, maxRetryCheckENI, err)
-				ipamdErrInc("waitENIAttachedMaxRetryExceeded")
-				break
-			}
-
 			log.Warnf("Error trying to set up ENI %s: %v", eni.ENIID, err)
 			if strings.Contains(err.Error(), "setupENINetwork: failed to find the link which uses MAC address") {
 				// If we can't find the matching link for this MAC address, there is no point in retrying for this ENI.
 				log.Debug("Unable to match link for this ENI, going to the next one.")
 				break
 			}
-			log.Debugf("Unable to discover IPs for this ENI yet (attempt %d/%d)", retry, maxRetryCheckENI)
-			time.Sleep(eniAttachTime)
 		}
 	}
 
@@ -679,42 +549,4 @@ func (c *IPAMContext) VerifyAndDeletePrefixesFromDatastore(eni string, coolDownH
 	}
 
 	return nil
-}
-
-func parseBoolEnvVar(envVariableName string, defaultVal bool) bool {
-	if strValue := os.Getenv(envVariableName); strValue != "" {
-		parsedValue, err := strconv.ParseBool(strValue)
-		if err == nil {
-			return parsedValue
-		}
-		log.Warnf("Failed to parse %s; using default: %v, err: %v", envVariableName, defaultVal, err)
-	}
-	return defaultVal
-}
-
-func disableENIProvisioning() bool {
-	return utils.GetBoolAsStringEnvVar(envDisableENIProvisioning, false)
-}
-
-// setTerminating atomically sets the terminating flag.
-func (c *IPAMContext) setTerminating() {
-	atomic.StoreInt32(&c.terminating, 1)
-}
-
-func (c *IPAMContext) isTerminating() bool {
-	return atomic.LoadInt32(&c.terminating) > 0
-}
-
-func max(x, y int) int {
-	if x < y {
-		return y
-	}
-	return x
-}
-
-func min(x, y int) int {
-	if y < x {
-		return y
-	}
-	return x
 }

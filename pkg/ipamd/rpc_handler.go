@@ -14,11 +14,6 @@
 package ipamd
 
 import (
-	"net"
-	"os"
-	"os/signal"
-	"syscall"
-
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/net/context"
@@ -28,6 +23,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"net"
 
 	"github.com/aws/amazon-vpc-cni-k8s/pkg/ipamd/datastore"
 	"github.com/aws/amazon-vpc-cni-k8s/rpc"
@@ -241,27 +237,9 @@ func (c *IPAMContext) RunRPCHandler(version string) error {
 
 	// Register reflection service on gRPC server.
 	reflection.Register(grpcServer)
-	// Add shutdown hook
-	go c.shutdownListener()
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Errorf("Failed to start server on gRPC port: %v", err)
 		return errors.Wrap(err, "ipamd: failed to start server on gPRC port")
 	}
 	return nil
-}
-
-// shutdownListener - Listen to signals and set ipamd to be in status "terminating"
-func (c *IPAMContext) shutdownListener() {
-	log.Info("Setting up shutdown hook.")
-	sig := make(chan os.Signal, 1)
-
-	// Interrupt signal sent from terminal
-	signal.Notify(sig, syscall.SIGINT)
-	// Terminate signal sent from Kubernetes
-	signal.Notify(sig, syscall.SIGTERM)
-
-	<-sig
-	log.Info("Received shutdown signal, setting 'terminating' to true")
-	// We received an interrupt signal, shut down.
-	c.setTerminating()
 }

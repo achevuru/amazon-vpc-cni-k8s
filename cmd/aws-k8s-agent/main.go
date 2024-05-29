@@ -42,9 +42,6 @@ const (
 
 	// Environment variable to disable the metrics endpoint on 61678
 	envDisableMetrics = "DISABLE_METRICS"
-
-	// Environment variable to disable the IPAMD introspection endpoint on 61679
-	envDisableIntrospection = "DISABLE_INTROSPECTION"
 )
 
 func main() {
@@ -70,12 +67,6 @@ func _main() int {
 	log.Infof("Starting L-IPAMD %s  ...", version.Version)
 	version.RegisterMetric()
 
-	// Check API Server Connectivity
-	if err := k8sapi.CheckAPIServerConnectivity(); err != nil {
-		log.Errorf("Failed to check API server connectivity: %s", err)
-		return 1
-	}
-
 	// Create Kubernetes client for API server requests
 	k8sClient, err := k8sapi.CreateKubeClient(appName)
 	if err != nil {
@@ -88,11 +79,6 @@ func _main() int {
 		log.Errorf("Failed to create event recorder: %s", err)
 		return 1
 	}
-
-	// Pool manager
-	//go ipamContext.StartNodeIPPoolManager()
-
-	//initLogger, _ := getLoggerWithLogLevel("info", "")
 
 	ctrlConfig, err := loadControllerConfig()
 	if err != nil {
@@ -142,21 +128,18 @@ func _main() int {
 		go metrics.ServeMetrics(metricsPort)
 	}
 
-	// CNI introspection endpoints
+	// TODO: Do we need it? - CNI introspection endpoints
 	/*
 		if !utils.GetBoolAsStringEnvVar(envDisableIntrospection, false) {
 			go ipamContext.ServeIntrospection()
 		}
 	*/
 
-	//go ipamContext.RunRPCHandler(version.Version)
-
 	log.Info("starting manager")
 	if err = mgr.Start(ctx); err != nil {
 		log.Errorf("problem running manager", err)
 		os.Exit(1)
 	}
-
 	return 0
 }
 
