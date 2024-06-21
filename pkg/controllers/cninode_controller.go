@@ -174,7 +174,7 @@ func (c *CNINodeReconciler) deriveNodeNetworkingInfo(ctx context.Context, cniNod
 
 func (c *CNINodeReconciler) deriveVPCCIDRs(ctx context.Context, cniNode *cniNode.CNINode) error {
 	c.v4VPCCIDRs = cniNode.Status.VPCCIDRs
-	c.v6VPCCIDRs = cniNode.Status.VPCCIDRs
+	c.v6VPCCIDRs = cniNode.Status.VPCV6CIDRs
 
 	//Check if relevant CIDR is filled based on the IP Family of the cluster and error out if that's not the case
 
@@ -199,7 +199,7 @@ func (c *CNINodeReconciler) deriveENIInfo(ctx context.Context, cniNode *cniNode.
 	for _, networkInterfaceInfo := range cniNode.Status.NetworkInterfaces {
 		c.log.Infof("Deriving Network Interface info for ID: %s", networkInterfaceInfo.ID)
 		var eniHostCIDRs, eniPrefixCIDRs, CoolDownHostCIDRs, CoolDownPrefixCIDRs []string
-		for _, Cidr := range networkInterfaceInfo.CIDRs {
+		for _, Cidr := range networkInterfaceInfo.V4CIDRs {
 			c.log.Infof("IP CIDR: %s", string(Cidr))
 			ipAddress, isPrefix := c.IsNonHostCIDR(string(Cidr))
 			if isPrefix {
@@ -209,7 +209,7 @@ func (c *CNINodeReconciler) deriveENIInfo(ctx context.Context, cniNode *cniNode.
 			}
 		}
 
-		for _, CoolDownCIDR := range networkInterfaceInfo.CoolDownCIDRs {
+		for _, CoolDownCIDR := range networkInterfaceInfo.UnusedCIDRs {
 			for _, Cidr := range CoolDownCIDR.CIDRs {
 				c.log.Infof("CoolDown CIDR: %s", string(Cidr))
 				ipAddress, isPrefix := c.IsNonHostCIDR(string(Cidr))
@@ -230,8 +230,8 @@ func (c *CNINodeReconciler) deriveENIInfo(ctx context.Context, cniNode *cniNode.
 				PrimaryIP:           string(networkInterfaceInfo.PrimaryCIDR),
 				DeviceNumber:        networkInterfaceInfo.DeviceIndex,
 				NetworkCardIndex:    networkInterfaceInfo.NetworkCardIndex,
-				SubnetIPv4CIDR:      string(networkInterfaceInfo.SubnetCIDR),
-				SubnetIPv6CIDR:      string(networkInterfaceInfo.SubnetCIDR),
+				SubnetIPv4CIDR:      string(networkInterfaceInfo.SubnetV4CIDR),
+				SubnetIPv6CIDR:      string(networkInterfaceInfo.SubnetV6CIDR),
 				IPv4Addresses:       eniHostCIDRs,
 				IPv4Prefixes:        eniPrefixCIDRs,
 				CoolDownHostCIDRs:   CoolDownHostCIDRs,

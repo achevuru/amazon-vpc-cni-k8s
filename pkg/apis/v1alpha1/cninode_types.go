@@ -19,8 +19,8 @@ package v1alpha1
 import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/awslabs/operatorpkg/status"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"time"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -28,50 +28,114 @@ import (
 
 type CIDR string
 
-type CooldownCIDRs struct {
-	CIDRs     []CIDR
-	StartedAt time.Time
+type UnusedCIDRs struct {
+	CIDRs           []CIDR      `json:"cidrs"`
+	UnusedTimestamp metav1.Time `json:"unusedTimestamp"`
 }
 
+type IPAllocationStrategy string
+
+const (
+	IPAllocationStrategyPrefixFallback IPAllocationStrategy = "PrefixFallback"
+	IPAllocationStrategySecondaryIP    IPAllocationStrategy = "SecondaryIP"
+)
+
+type NetworkPolicyEnforcement string
+
+const (
+	StrictMode NetworkPolicyEnforcement = "DefaultDeny"
+	Permissive NetworkPolicyEnforcement = "DefaultAllow"
+)
+
+type SNATPolicy string
+
+const (
+	Hashrandom = "hashrandom"
+	PRNG       = "prng"
+	None       = "none"
+	External   = "external"
+)
+
 type NetworkInterface struct {
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:MinLength:=1
 	ID string `json:"id"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:MinLength:=1
 	SubnetID string `json:"subnetId"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:MinLength:=1
 	AttachmentId string `json:"attachmentId"`
-	// +kubebuilder:validation:XValidation:rule="self >= 0",message="must not be negative"
+	// +required
+	// +kubebuilder:validation:Minimum:=0
 	NetworkCardIndex int32 `json:"networkCardIndex"`
-	// +kubebuilder:validation:XValidation:rule="self >= 0",message="must not be negative"
+	// +required
+	// +kubebuilder:validation:Minimum:=0
 	DeviceIndex int32 `json:"deviceIndex"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
-	PrimaryCIDR CIDR `json:"primaryCIDR"`
+	// +required
 	// +kubebuilder:validation:MinLength:=1
 	// +kubebuilder:validation:Type:=string
-	SubnetCIDR CIDR `json:"subnetCIDR"`
-	// +kubebuilder:validation:XValidation:message="must not be empty",rule="self.size() != 0"
-	CIDRs         []CIDR `json:"cidrs"`
-	CoolDownCIDRs []CooldownCIDRs
+	PrimaryCIDR CIDR `json:"primaryCIDR"`
+	// +required
+	// +kubebuilder:validation:MinLength:=1
+	MacAddress string `json:"macAddress"`
+	// +required
+	// +kubebuilder:validation:MinLength:=1
+	// +kubebuilder:validation:Type:=string
+	SubnetV4CIDR CIDR `json:"subnetV4CIDR"`
+	SubnetV6CIDR CIDR `json:"subnetV6CIDR"`
+	// +required
+	// +kubebuilder:validation:MinItems:=1
+	V4CIDRs []CIDR `json:"v4CIDRs"`
+	// +optional
+	V6CIDRs []CIDR `json:"v6CIDRs"`
+	// +optional
+	UnusedCIDRs []UnusedCIDRs `json:"unusedCIDRs"`
 }
 
 // CNINodeSpec defines the desired state of CNINode
 type CNINodeSpec struct {
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:MinLength:=1
 	InstanceID string `json:"instanceID"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:MinLength:=1
+	VPCID string `json:"vpcID"`
+	// +required
+	// +kubebuilder:validation:MinLength:=1
+	// +kubebuilder:validation:Type:=string
 	InstanceType types.InstanceType `json:"instanceType"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
-	Hypervisor types.InstanceTypeHypervisor `json:"hypervisor"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:Enum:={IPv4,IPv6}
+	IPFamily corev1.IPFamily `json:"ipFamily"`
+	// +required
+	// +kubebuilder:validation:MinLength:=1
+	// +kubebuilder:validation:Type:=string
+	IPAllocationStrategy IPAllocationStrategy `json:"ipAllocationStrategy"`
+	// +required
+	// +kubebuilder:validation:Enum=hashrandom;prng;none;external
+	SNATPolicy SNATPolicy `json:"snatPolicy"`
+	// +required
+	// +kubebuilder:validation:Enum=DefaultDeny;DefaultAllow
+	NetworkPolicyEnforcement NetworkPolicyEnforcement `json:"networkPolicyEnforcement"`
+	// +required
+	// +kubebuilder:validation:Minimum:=1
+	ConntrackCleanupInterval int `json:"conntrackCleanupInterval"`
+	// +required
+	// +kubebuilder:validation:MinLength:=1
 	PrimaryIPv4Address string `json:"primaryIPv4"`
-	// +kubebuilder:validation:XValidation:rule="self != ''",message="must not be empty"
+	// +required
+	// +kubebuilder:validation:MinLength:=1
 	PrimaryNetworkInterfaceID string `json:"primaryNetworkInterfaceID"`
-	// +kubebuilder:validation:XValidation:rule="self > 0",message="must be positive"
-	MaxiumumNetworkCards int32 `json:"maximumNetworkCards"`
-	// +kubebuilder:validation:XValidation:rule="self > 0",message="must be positive"
+	// +required
+	// +kubebuilder:validation:Minimum:=1
+	MaximumNetworkCards int32 `json:"maximumNetworkCards"`
+	// +required
+	// +kubebuilder:validation:Minimum:=1
 	MaximumNetworkInterfaces int32 `json:"maximumNetworkInterfaces"`
-	// +kubebuilder:validation:XValidation:rule="self > 0",message="must be positive"
-	Ipv4AddressesPerInterface int32 `json:"ipv4AddressesPerInterface"`
+	// +required
+	// +kubebuilder:validation:Minimum:=1
+	IPv4AddressesPerInterface int32 `json:"ipv4AddressesPerInterface"`
 }
 
 // CNINodeStatus defines the observed state of CNINode
@@ -79,6 +143,7 @@ type CNINodeStatus struct {
 	NetworkInterfaces []NetworkInterface `json:"networkInterfaces,omitempty"`
 	SubnetIDs         []string           `json:"subnetIDs,omitempty"`
 	VPCCIDRs          []string           `json:"vpcCIDRs,omitempty"`
+	VPCV6CIDRs        []string           `json:"vpcV6CIDRs,omitempty"`
 	Conditions        []status.Condition `json:"conditions,omitempty"`
 }
 

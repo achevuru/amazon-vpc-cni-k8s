@@ -512,6 +512,7 @@ func (ds *DataStore) DelIPv4CidrFromStore(eniID string, cidr net.IPNet, force bo
 	ds.lock.Lock()
 	defer ds.lock.Unlock()
 
+	ds.log.Debugf("Deleting %s CIDR from datastore", cidr.String())
 	curENI, ok := ds.eniPool[eniID]
 	if !ok {
 		ds.log.Debugf("Unknown ENI %s while deleting the CIDR", eniID)
@@ -1181,9 +1182,10 @@ func (ds *DataStore) FreeablePrefixes(eniID string) map[string]bool {
 		return nil
 	}
 
-	//freeable := make([]net.IPNet, 0, len(eni.AvailableIPv4Cidrs))
 	freeable := make(map[string]bool)
 	for _, assignedaddr := range eni.AvailableIPv4Cidrs {
+		ds.log.Debugf("CIDR: %s; isPrefix: %t, Assigned IP count: %d ", assignedaddr.Cidr.String(), assignedaddr.IsPrefix,
+			assignedaddr.AssignedIPAddressesInCidr())
 		if assignedaddr.IsPrefix && assignedaddr.AssignedIPAddressesInCidr() == 0 {
 			freeable[assignedaddr.Cidr.String()] = true
 		}

@@ -528,7 +528,7 @@ func (c *IPAMContext) VerifyAndDeletePrefixesFromDatastore(eni string, coolDownH
 
 	//Delete the IPs under Cool Down list from the datastore
 	for _, HostCidr := range coolDownHostCIDRs {
-		if _, ok := freeIPs[HostCidr]; !ok {
+		if _, ok := freeIPs[HostCidr]; ok {
 			_, ipNet, _ := net.ParseCIDR(HostCidr)
 			err = c.dataStore.DelIPv4CidrFromStore(eni, *ipNet, false)
 			if err != nil {
@@ -539,7 +539,9 @@ func (c *IPAMContext) VerifyAndDeletePrefixesFromDatastore(eni string, coolDownH
 
 	//Delete the Prefixes under Cool Down list from the datastore
 	for _, PrefixCidr := range coolDownPrefixCIDRs {
-		if _, ok := freePrefixes[PrefixCidr]; !ok {
+		log.Infof("Processing CoolDown CIDR: %s", PrefixCidr)
+		if _, ok := freePrefixes[PrefixCidr]; ok {
+			log.Infof("Deleting the Unused CIDR: %s", PrefixCidr)
 			_, ipNet, _ := net.ParseCIDR(PrefixCidr)
 			err = c.dataStore.DelIPv4CidrFromStore(eni, *ipNet, false)
 			if err != nil {

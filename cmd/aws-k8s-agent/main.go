@@ -87,12 +87,6 @@ func _main() int {
 		os.Exit(1)
 	}
 
-	//ctrlLogger, err := getLoggerWithLogLevel(ctrlConfig.LogLevel, ctrlConfig.LogFile)
-	///if err != nil {
-	//initLogger.Error("unable to setup logger")
-	//os.Exit(1)
-	//}
-	//ctrl.SetLogger(ctrlLogger)
 	restCFG, err := config.BuildRestConfig(ctrlConfig.RuntimeConfig)
 	if err != nil {
 		//setupLog.Error(err, "unable to build REST config")
@@ -143,7 +137,7 @@ func _main() int {
 	return 0
 }
 
-// getLoggerWithLogLevel returns logger with specific log level.
+// TODO - getLoggerWithLogLevel returns logger with specific log level.
 /*
 func getLoggerWithLogLevel(logLevel string, logFilePath string) (logr.Logger, error) {
 	logConfig := logger.Configuration{
