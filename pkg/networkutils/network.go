@@ -188,13 +188,13 @@ const (
 )
 
 // New creates a linuxNetwork object
-func New() NetworkAPIs {
+func New(isExternalSNATEnabled bool, snatType string) NetworkAPIs {
 	return &linuxNetwork{
-		useExternalSNAT:        useExternalSNAT(),
+		useExternalSNAT:        isExternalSNATEnabled,
 		ipv6EgressEnabled:      ipV6EgressEnabled(),
 		excludeSNATCIDRs:       parseCIDRString(envExcludeSNATCIDRs),
 		externalServiceCIDRs:   parseCIDRString(envExternalServiceCIDRs),
-		typeOfSNAT:             typeOfSNAT(),
+		typeOfSNAT:             typeOfSNAT(snatType),
 		nodePortSupportEnabled: nodePortSupportEnabled(),
 		mainENIMark:            getConnmark(),
 		mtu:                    GetEthernetMTU(),
@@ -851,7 +851,7 @@ func GetConfigForDebug() map[string]interface{} {
 		envMTU:                  GetEthernetMTU(),
 		envVethPrefix:           getVethPrefixName(),
 		envNodePortSupport:      nodePortSupportEnabled(),
-		envRandomizeSNAT:        typeOfSNAT(),
+		envRandomizeSNAT:        typeOfSNAT(""),
 	}
 }
 
@@ -908,9 +908,9 @@ func parseCIDRString(envVar string) []string {
 	return cidrs
 }
 
-func typeOfSNAT() snatType {
+func typeOfSNAT(snatType string) snatType {
 	defaultValue := randomPRNGSNAT
-	strValue := os.Getenv(envRandomizeSNAT)
+	strValue := snatType
 	switch strValue {
 	case "":
 		// empty means default, which is --random-fully

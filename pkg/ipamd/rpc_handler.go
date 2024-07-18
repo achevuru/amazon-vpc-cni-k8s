@@ -97,7 +97,7 @@ func (s *server) AddNetwork(ctx context.Context, in *rpc.AddNetworkRequest) (*rp
 		for _, cidr := range pbVPCV4cidrs {
 			log.Debugf("VPC CIDR %s", cidr)
 		}
-		useExternalSNAT = s.ipamContext.networkClient.UseExternalSNAT()
+		useExternalSNAT = s.ipamContext.isExternalSNATEnabled()
 		if !useExternalSNAT {
 			for _, cidr := range s.ipamContext.networkClient.GetExcludeSNATCIDRs() {
 				log.Debugf("CIDR SNAT Exclusion %s", cidr)

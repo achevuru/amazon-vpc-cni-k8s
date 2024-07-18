@@ -62,6 +62,7 @@ type IPAMContext struct {
 	k8sClient     client.Client
 	enableIPv4    bool
 	enableIPv6    bool
+	snatType      string
 	networkClient networkutils.NetworkAPIs
 
 	myNodeName            string
@@ -162,18 +163,21 @@ func prometheusRegister() {
 // New retrieves IP address usage information from Instance MetaData service and Kubelet
 // then initializes IP address pool data store
 func New(k8sClient client.Client, enableIPv4, enableIPv6 bool, nodeName string, v4VPCCIDRs, v6VPCCIDRs []string,
-	primaryIP, primaryMAC, primaryENIID string, ipDataStore *datastore.DataStore, networkInterfaces []ENIMetadata) (*IPAMContext, error) {
+	primaryIP, primaryMAC, primaryENIID string, ipDataStore *datastore.DataStore, networkInterfaces []ENIMetadata,
+	snatType string) (*IPAMContext, error) {
 	var err error
 
 	prometheusRegister()
 	c := &IPAMContext{}
 	c.k8sClient = k8sClient
-	c.networkClient = networkutils.New()
 	c.enableIPv4 = enableIPv4
 	c.enableIPv6 = enableIPv6
 	c.v4VPCCIDRs = v4VPCCIDRs
 	c.v6VPCCIDRs = v6VPCCIDRs
 	c.dataStore = ipDataStore
+	c.snatType = snatType
+
+	c.networkClient = networkutils.New(c.isExternalSNATEnabled(), snatType)
 
 	c.primaryIP = make(map[string]string)
 	//c.enablePodIPAnnotation = enablePodIPAnnotation()
@@ -551,4 +555,16 @@ func (c *IPAMContext) VerifyAndDeletePrefixesFromDatastore(eni string, coolDownH
 	}
 
 	return nil
+}
+
+func (c *IPAMContext) isExternalSNATEnabled() bool {
+	if c.snatType == "external" {
+		log.Infof("External SNAT option enabled....")
+		return true
+	}
+	return false
+}
+
+func (c *IPAMContext) SNATType() string {
+	return c.snatType
 }

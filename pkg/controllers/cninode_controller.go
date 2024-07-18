@@ -57,6 +57,8 @@ type CNINodeReconciler struct {
 
 	ipamContext *ipamd.IPAMContext
 
+	snatType string
+
 	//Logger
 	log logger.Logger
 }
@@ -138,7 +140,7 @@ func (c *CNINodeReconciler) reconcileCNINode(ctx context.Context, cniNode *cniNo
 	//Configure Primary ENI
 	if !c.isNodeInitialized {
 		if c.ipamContext, err = ipamd.New(c.k8sClient, true, false, c.nodeName, c.v4VPCCIDRs, c.v6VPCCIDRs,
-			c.nodeIP, c.primaryMAC, c.primaryENIID, c.datastore, networkInterfaces); err != nil {
+			c.nodeIP, c.primaryMAC, c.primaryENIID, c.datastore, networkInterfaces, c.snatType); err != nil {
 			c.log.Errorf("IPAMD Initialization failed")
 		}
 		go c.ipamContext.RunRPCHandler(version.Version)
@@ -163,6 +165,11 @@ func (c *CNINodeReconciler) deriveNodeNetworkingInfo(ctx context.Context, cniNod
 		return nil, nil
 	}
 
+	//Derive SNAT Type
+	if err = c.deriveSnatType(ctx, cniNode); err != nil {
+		c.log.Errorf("Unable to derive SNAT config for the node")
+		return nil, nil
+	}
 	//Derive information about ENIs and IPs assigned to them
 	if networkInterfaces, err = c.deriveENIInfo(ctx, cniNode); err != nil {
 		c.log.Errorf("Unable to derive IP CIDRs Info for the node")
@@ -190,6 +197,13 @@ func (c *CNINodeReconciler) derivePrimaryENIInfo(ctx context.Context, cniNode *c
 
 	c.log.Infof("Primary ENI ID: %s", c.primaryENIID)
 	c.log.Infof("Primary IP: %s", c.nodeIP)
+	return nil
+}
+
+func (c *CNINodeReconciler) deriveSnatType(ctx context.Context, cniNode *cniNode.CNINode) error {
+	c.snatType = string(cniNode.Spec.SNATPolicy)
+
+	c.log.Infof("SNAT Type: %s", c.snatType)
 	return nil
 }
 
